@@ -1,0 +1,31 @@
+LeanServerConfig:
+  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.21.0
+  LeanServerPort: 8000
+  LeanServerWorkers: 8
+  LeanServerHeader: "import Mathlib\n"
+  LeanServerTimeout: 60
+  MaxTotalMemory: 0.6
+  MaxProcessMemory: 0.6
+
+TheoremRetrieverAgentConfig:
+  RetrieverServerURL: "http://localhost:8002"
+  TheoremRetrieverAgentModel: "gpt-5-mini"
+
+ProverAgentConfig:
+  ProverPort: 8001
+  ProverModel: "model/Goedel-Prover-V2-32B"
+  sampling_params:
+    temperature: 0.5
+    n: 4
+    max_tokens: 8192
+
+InformalProofAgentConfig:
+  InformalProofAgentModel: "gpt-5-mini"
+  sampling_params:
+    temperature: 0.2
+    n: 1
+
+DecompositionAgentConfig:
+  DecompositionAgentModel: "gpt-5-chat-latest"
+  sampling_params:
+    n: 1
