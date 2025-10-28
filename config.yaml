@@ -1,31 +1,53 @@
 LeanServerConfig:
-  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.21.0
-  LeanServerPort: 8000
-  LeanServerWorkers: 8
-  LeanServerHeader: "import Mathlib\n"
+  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.21.0 # Your local Lean project path
+  LeanServerPort: 8000 # The port of the verifier server
+  LeanServerWorkers: 8 # The number of workers for the verifier server
+  LeanServerHeader: "import Mathlib\nimport Aesop\n\nset_option maxHeartbeats 0\n\nopen BigOperators Real Nat Topology Rat\n" # The header of the verifier server
   LeanServerTimeout: 60
-  MaxTotalMemory: 0.6
-  MaxProcessMemory: 0.6
+  MaxTotalMemory: 0.6 # The maximum total memory of the verifier server
+  MaxProcessMemory: 0.6 # The maximum process memory of the verifier server
 
-TheoremRetrieverAgentConfig:
-  RetrieverServerURL: "http://localhost:8002"
-  TheoremRetrieverAgentModel: "gpt-5-mini"
 
 ProverAgentConfig:
-  ProverPort: 8001
-  ProverModel: "model/Goedel-Prover-V2-32B"
+  base_url: "http://localhost:8001/v1"
+  model: "model/Goedel-Prover-V2-8B"
   sampling_params:
     temperature: 0.5
     n: 4
     max_tokens: 8192
 
-InformalProofAgentConfig:
-  InformalProofAgentModel: "gpt-5-mini"
+SelfCorrectionAgentConfig:
+  base_url: "https://api.openai-proxy.org/v1"
+  model: "gpt-5-chat-latest"
   sampling_params:
     temperature: 0.2
     n: 1
 
-DecompositionAgentConfig:
-  DecompositionAgentModel: "gpt-5-chat-latest"
+TheoremRetrievalAgentConfig:
+  retriever_url: "http://localhost:8002"
+  base_url: "https://api.openai-proxy.org/v1"
+  model: "gpt-5-chat-latest"
   sampling_params:
+    temperature: 0.2
+    n: 1
+
+InformalProofAgentConfig:
+  base_url: "https://api.openai-proxy.org/v1"
+  model: "gpt-5-chat-latest"
+  sampling_params:
+    temperature: 0.2
+    n: 1
+
+ProofSketchAgentConfig:
+  base_url: "https://api.openai-proxy.org/v1"
+  model: "gpt-5-chat-latest"
+  sampling_params:
+    temperature: 0.2
+    n: 1
+
+ProofAssemblyAgentConfig:
+  base_url: "https://api.openai-proxy.org/v1"
+  model: "gpt-5-chat-latest"
+  sampling_params:
+    temperature: 0.2
     n: 1

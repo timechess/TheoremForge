@@ -10,7 +10,11 @@ dependencies = [
     "google-genai>=1.46.0",
     "lean-interact>=0.9.1",
     "loguru>=0.7.3",
+    "motor>=3.3.2",
     "pyyaml>=6.0.3",
+    "qdrant-client>=1.15.1",
+    "sentence-transformers>=5.1.2",
+    "streamlit>=1.50.0",
     "uvicorn>=0.38.0",
     "vllm>=0.11.0",
 ]
@@ -25,3 +29,5 @@ dev = [
     "ipykernel>=7.0.1",
 ]
 
+[project.scripts]
+run_lean_server = "theoremforge.lean_server.run_server:main"

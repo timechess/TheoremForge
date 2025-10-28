@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from server import AsyncVerifier
 from loguru import logger
 import sys
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from theoremforge.config import config
 from theoremforge.utils import get_error_str
-from theoremforge.lean_server.server import erase_header
+from theoremforge.lean_server.server import AsyncVerifier, erase_header
 
 lean_config = config.lean_server
 

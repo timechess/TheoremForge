@@ -1,409 +1,133 @@
 # TheoremForge
 
-An automated theorem proving system for Lean 4 with advanced decomposition and concurrent processing capabilities.
+## Setup
 
-## 🎯 What's New in V2?
+First clone this repository:
 
-TheoremForge V2 introduces major performance and architectural improvements:
-
-- ✅ **5-10x Faster** - Concurrent processing of multiple theorems
-- ✅ **Fully Async** - Non-blocking operations throughout
-- ✅ **Continuous Requests** - Add theorems dynamically during processing
-- ✅ **Real-time Persistence** - Results saved as they complete
-- ✅ **Better Error Handling** - Automatic retries with exponential backoff
-- ✅ **Improved Resource Usage** - 3-4x better CPU/GPU utilization
-- ✅ **Modular Architecture** - Clean dependency injection
-- ✅ **Real-time Monitoring** - Comprehensive statistics and progress tracking
-
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
+```sh
+git clone https://github.com/timechess/TheoremForge.git
 cd TheoremForge
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up API keys
-export DEEPSEEK_API_KEY="your-api-key"
-
-# Start Lean server (in separate terminal)
-python -m theoremforge.lean_server.run_server
 ```
 
-### Basic Usage (V2 - Recommended)
+### Python Environment
 
-```python
-import asyncio
-from theoremforge.manager_v2 import TheoremForgeStateManagerV2
+This project uses `uv` to manage python dependencies. Install uv via:
 
-async def main():
-    # Initialize with 5 concurrent workers per stage
-    manager = TheoremForgeStateManagerV2(max_workers=5)
-    await manager.start()
-    
-    try:
-        # Submit theorems for proving
-        statements = [
-            "theorem example1 : 1 + 1 = 2 := by sorry",
-            "theorem example2 : 2 + 2 = 4 := by sorry",
-        ]
-        await manager.submit_multiple(statements)
-        
-        # Wait for completion
-        await manager.wait_for_completion()
-    finally:
-        await manager.stop()
-
-asyncio.run(main())
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Running Examples
+Now create virtual environment and install dependencies using:
 
-```bash
-# Run V2 with dataset (recommended)
-python main_v2.py
-
-# Run continuous submission demo
-python main_v2.py continuous
-
-# Run dynamic workload demo
-python main_v2.py dynamic
-
-# Run legacy version
-python main.py
+```sh
+uv venv
+uv sync
 ```
 
-## 📚 Documentation
+**vLLM Note**: This project uses vLLM to serve prover models, which may have dependency issues due to different cuda versions. You can run the command below to override the installation above:
 
-- **[Quick Start Guide](QUICK_START.md)** - Get started in 5 minutes
-- **[Optimization Guide](OPTIMIZATION_GUIDE.md)** - Comprehensive documentation
-- **[Performance Comparison](PERFORMANCE_COMPARISON.md)** - Detailed benchmarks
-- **[Optimization Summary](OPTIMIZATION_SUMMARY.md)** - Technical overview
-
-## 🏗️ Architecture
-
-### System Components
-
-```
-┌─────────────────────────────────────────────┐
-│    TheoremForgeStateManagerV2               │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │   AsyncQueueManager                   │ │
-│  │   - Concurrent worker pools           │ │
-│  │   - Stage-based routing               │ │
-│  │   - Continuous request handling       │ │
-│  └───────────────────────────────────────┘ │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │   AgentFactory                        │ │
-│  │   - Dependency injection              │ │
-│  │   - Agent lifecycle management        │ │
-│  └───────────────────────────────────────┘ │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │   Agents                              │ │
-│  │   - Prover Agent                      │ │
-│  │   - Decomposition Agent               │ │
-│  │   - Subgoal Solving Agent             │ │
-│  │   - Proof Assembly Agent              │ │
-│  └───────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
+```sh
+bash scripts/install_vllm.sh
 ```
 
-### Workflow
+### Lean Server
 
-1. **First Attempt** - Try to prove theorem directly
-2. **Problem Decomposition** - If direct proof fails, decompose into subgoals
-3. **Subgoal Solving** - Solve each subgoal independently
-4. **Proof Assembly** - Combine subgoal proofs into final proof
+This project depends on a local Lean project to setup a verifier server. You should first install Lean on your device. Here is the instruction for Linux:
 
-All stages can process multiple theorems concurrently!
+First install `elan`:
 
-## 🔧 Configuration
-
-### Worker Pool Sizing
-
-```python
-# Small datasets or limited resources
-manager = TheoremForgeStateManagerV2(max_workers=2)
-
-# Medium datasets (recommended default)
-manager = TheoremForgeStateManagerV2(max_workers=5)
-
-# Large datasets with powerful hardware
-manager = TheoremForgeStateManagerV2(max_workers=10)
+```sh
+curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
 ```
 
-### Retry Configuration
+Make sure to add the environment variables:
 
-```python
-from theoremforge.retry_handler import RetryConfig
-
-retry_config = RetryConfig(
-    max_retries=3,
-    initial_delay=1.0,
-    max_delay=60.0
-)
-
-manager = TheoremForgeStateManagerV2(
-    enable_retry=True,
-    retry_config=retry_config
-)
+```sh
+source $HOME/.elan/env
 ```
 
-### Custom State Callbacks
+Setup `mathlib4` as our local project (the environment for the verifier server):
 
-```python
-async def my_callback(state):
-    if state.result == "success":
-        # Handle successful proof
-        print(f"✓ Proved: {state.id}")
-    else:
-        # Handle failed proof
-        print(f"✗ Failed: {state.id}")
+```sh
+git clone https://github.com/leanprover-community/mathlib4.git
 
-manager = TheoremForgeStateManagerV2(
-    state_callback=my_callback
-)
+# Checkout your specified revision. Here we use v4.21.0
+cd mathlib4 && git checkout v4.21.0
+
+# Build the project
+lake exe cache get
+lake build
 ```
 
-## 📊 Performance
+If everything goes well, you should see `Build completed successfully` at the end of the output. Before starting the verifier server, follow [Configuration and Environment Variables](#configuration-and-environment-variables). Then, run the following command to start the verifier server:
 
-### Benchmarks (100 theorems)
-
-| Metric | V1 (Legacy) | V2 (Optimized) | Improvement |
-|--------|-------------|----------------|-------------|
-| Total Time | 847s | 142s | **5.96x faster** |
-| CPU Usage | 25% | 78% | **3.12x better** |
-| GPU Usage | 15% | 65% | **4.33x better** |
-| Memory Peak | 12GB | 8GB | **33% less** |
-| Throughput | 0.12/s | 0.70/s | **5.83x higher** |
-
-### Resource Utilization
-
-```
-V1 (Sequential):
-CPU:  ▁▁█▁▁▁▁█▁▁▁▁█▁▁▁  (Underutilized)
-GPU:  ▁▁█▁▁▁▁▁▁▁▁▁█▁▁▁  (Very low)
-
-V2 (Concurrent):
-CPU:  ████████████████  (Well utilized)
-GPU:  ██████████████▄▄  (Much better)
+```sh
+uv run run_lean_server
 ```
 
-## 🎨 Features
+### Search Server
 
-### Concurrent Processing
-- Process multiple theorems simultaneously
-- Configurable worker pools per stage
-- Near-linear scaling with worker count
+This project also needs a semantic search engine for Mathlib theorems. We use the open-sourced [dataset](https://huggingface.co/datasets/FrenzyMath/mathlib_informal_v4.19.0) which contains informal descriptions of the theorems. We use [Qdrant](https://qdrant.tech/) as the vector database, setup by docker. You should first configure the environment variables in `.env` before running `docker compose up -d` to start the service. For the instructions to setup environment variables, see [Configuration and Environment Variables](#configuration-and-environment-variables).
 
-### Continuous Request Handling
-- Add theorems dynamically during processing
-- No need to batch everything upfront
-- Perfect for API servers and interactive use
+After start the docker containers, run the following command to encode and upload the embeddings of the informal descriptions to the vector database. We use `all-mpnet-base-v2` as the embedding model for efficiency.
 
-### Real-time Monitoring
-```python
-stats = manager.get_stats()
-print(f"Progress: {stats['total_finished']}/{stats['total_submitted']}")
-print(f"Success rate: {stats['successful']/stats['total_finished']:.1%}")
-print(f"Active tasks: {stats['active_tasks']}")
-print(f"Queue sizes: {stats['queue_sizes']}")
+```sh
+# Use multi-gpus (4 as an example)
+uv run python scripts/upload_const.py --dataset_name FrenzyMath/mathlib_informal_v4.19.0 --gpu_ids 0,1,2,3
+
+# Not use multi-gpus
+uv run python scripts/upload_const.py --dataset_name FrenzyMath/mathlib_informal_v4.19.0 --no_multi_gpu
 ```
 
-### Robust Error Handling
-- Automatic retry with exponential backoff
-- Circuit breaker for cascading failures
-- Error isolation (one failure doesn't stop others)
-- Comprehensive error logging
+This process may take some time depending on your hardware. Then start the server by running:
 
-### State Persistence
-- Real-time saving of finished states
-- No loss of progress on interruption
-- Custom callbacks for state handling
-- JSONL format for easy processing
-
-## 🧪 Testing
-
-```bash
-# Run unit tests
-pytest tests/
-
-# Run integration tests
-pytest tests/integration/
-
-# Run with coverage
-pytest --cov=theoremforge tests/
+```sh
+uv run python scripts/run_search_server.py --port 8002
 ```
 
-## 📝 Examples
+Run the following command to test:
 
-### Example 1: Batch Processing
-
-```python
-async def batch_process(statements):
-    manager = TheoremForgeStateManagerV2(max_workers=10)
-    await manager.start()
-    
-    try:
-        await manager.submit_multiple(statements)
-        await manager.wait_for_completion()
-    finally:
-        await manager.stop()
+```sh
+curl --request POST \
+  --url http://localhost:8002/search \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "queries": ["Prime number"],
+    "topk": 5
+}' | jq
 ```
 
-### Example 2: Continuous Submission
+### Configuration and Environment Variables
 
-```python
-async def continuous_process():
-    manager = TheoremForgeStateManagerV2(max_workers=5)
-    await manager.start()
-    
-    try:
-        # Submit initial batch
-        await manager.submit_multiple(initial_theorems)
-        
-        # Keep adding more
-        while has_more:
-            new_theorems = get_next_batch()
-            await manager.submit_multiple(new_theorems)
-            await asyncio.sleep(10)
-            
-        await manager.wait_for_completion()
-    finally:
-        await manager.stop()
+Your `.env` file should contain:
+
+```sh
+CLOSEAI_API_KEY=YOUR_CLOSEAI_API_KEY
+MONGO_PASSWORD=YOUR_MONGODB_PASSWORD
+DATABASE_URL=mongodb://admin:${MONGO_PASSWORD}@localhost:27018/theoremforge?authSource=admin
 ```
 
-### Example 3: Monitoring Progress
+After setup the variables, run `docker compose up -d` to start the docker containers.
 
-```python
-async def monitor_progress():
-    manager = TheoremForgeStateManagerV2(max_workers=5)
-    await manager.start()
-    
-    try:
-        await manager.submit_multiple(statements)
-        
-        while True:
-            stats = manager.get_stats()
-            print(f"Progress: {stats['total_finished']}/{stats['total_submitted']}")
-            
-            if stats['total_finished'] >= stats['total_submitted']:
-                break
-                
-            await asyncio.sleep(5)
-            
-    finally:
-        await manager.stop()
+The configuration file is `config.yaml`. Note that `ProverAgentConfig` depends on local vLLM server, the others depend on [CloseAI](https://referer.shadowai.xyz/r/1038507) (This is my invitation link). You can also use other model API providers by changing the `base_url`, but you don't need to modify the name of the environment variable `CLOSEAI_API_KEY`.
+
+> TODO: Support using different model providers.
+
+Create a directory named `model` and download [Goedel-Prover-V2](https://huggingface.co/Goedel-LM/Goedel-Prover-V2-32B) to this directory. Run the following command to serve the prover model.
+
+```sh
+bash scripts/serve_goedel_prover.sh model/Goedel-Prover-V2-32B ${PROVER_PORT} ${TENSOR_PARALLEL_SIZE}
+# Example: bash scripts/serve_goedel_prover.sh model/Goedel-Prover-V2-32B 8001 4
 ```
 
-## 🔄 Migration from V1 to V2
+Modify the `config.yaml` according to your port and model.
 
-### Old Code (V1)
-```python
-from theoremforge.manager import TheoremForgeStateManager
+After setting up the 3 servers (verifier server, search server and prover model), you can start to run the agent workflow.
 
-manager = TheoremForgeStateManager()
-for statement in statements:
-    manager.add_formal_statement(statement)
-await manager.run()
+## Example Usage
+
+Run the workflow on `minif2f_test` using this script:
+
+```sh
+uv run python main.py
 ```
-
-### New Code (V2)
-```python
-from theoremforge.manager_v2 import TheoremForgeStateManagerV2
-
-manager = TheoremForgeStateManagerV2(max_workers=5)
-await manager.start()
-
-try:
-    await manager.submit_multiple(statements)
-    await manager.wait_for_completion()
-finally:
-    await manager.stop()
-```
-
-**Migration time: ~1-2 hours | Risk: Low | Benefit: 5-10x speedup**
-
-## 📦 Project Structure
-
-```
-TheoremForge/
-├── theoremforge/
-│   ├── agents/              # Proof agents
-│   ├── lean_server/         # Lean server integration
-│   ├── prover/              # Prover logic
-│   ├── async_queue_manager.py   # Queue and worker management
-│   ├── agent_factory.py     # Agent creation and DI
-│   ├── manager.py           # Legacy manager
-│   ├── manager_v2.py        # Optimized async manager
-│   ├── retry_handler.py     # Retry logic
-│   ├── state.py             # State definitions
-│   └── utils.py             # Utilities
-├── main.py                  # Legacy entry point
-├── main_v2.py               # New entry point with examples
-├── config.yaml              # Configuration
-├── QUICK_START.md           # Quick start guide
-├── OPTIMIZATION_GUIDE.md    # Comprehensive guide
-├── PERFORMANCE_COMPARISON.md # Benchmarks
-└── OPTIMIZATION_SUMMARY.md  # Technical summary
-```
-
-## 🛠️ Development
-
-### Adding New Agents
-
-1. Create agent class extending `BaseAgent`
-2. Register in `AgentFactory`
-3. Add handler in `manager_v2.py`
-4. Update documentation
-
-### Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Add tests for new features
-4. Update documentation
-5. Submit pull request
-
-## 📄 License
-
-[Your License Here]
-
-## 🙏 Acknowledgments
-
-- Lean 4 team for the proof assistant
-- DeepSeek for LLM API
-- vLLM for efficient model serving
-
-## 📞 Support
-
-- **Documentation**: See docs/ directory
-- **Issues**: Open GitHub issue
-- **Questions**: Check FAQ in OPTIMIZATION_GUIDE.md
-
-## 🎯 Roadmap
-
-- [ ] Distributed processing across multiple machines
-- [ ] Priority queues for important theorems
-- [ ] Result caching for common patterns
-- [ ] Web API for remote submission
-- [ ] Prometheus metrics integration
-- [ ] Database backend for results
-- [ ] Advanced auto-tuning strategies
-
----
-
-**Version**: 2.0.0  
-**Status**: Production Ready  
-**Last Updated**: October 21, 2025
-
-
-
-

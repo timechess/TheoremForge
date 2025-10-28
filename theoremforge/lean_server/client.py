@@ -1,5 +1,6 @@
 import aiohttp
 
+
 class RemoteVerifier:
     """
     A client for the Lean verification server.

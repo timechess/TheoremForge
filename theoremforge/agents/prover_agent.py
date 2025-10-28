@@ -1,114 +1,133 @@
-from openai import AsyncOpenAI
-from theoremforge.state import TheoremForgeState, ProverTrace
-from jinja2 import FileSystemLoader, Environment
-from pathlib import Path
 from loguru import logger
+from openai import AsyncOpenAI
+from theoremforge.state import TheoremForgeContext
 from theoremforge.utils import extract_lean_code
 from theoremforge.agents.base_agent import BaseAgent
-from typing import Tuple
-from theoremforge.agents.verifier_agent import VerifierAgent
-from theoremforge.agents.self_correction_agent import SelfCorrectionAgent
-import asyncio
-
-env = Environment(loader=FileSystemLoader(Path(__file__).parent / "prompts"))
+from theoremforge.prompt_manager import prompt_manager
 
 
 class ProverAgent(BaseAgent):
     def __init__(
         self,
+        context: TheoremForgeContext,
         base_url: str,
         api_key: str,
         model_name: str,
-        verifier_agent: VerifierAgent,
-        self_correction_agent: SelfCorrectionAgent,
+        sampling_params: dict,
     ) -> None:
         super().__init__(
             agent_name="prover_agent",
-            subagents=[verifier_agent, self_correction_agent],
+            context=context,
         )
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=900)
         self.model_name = model_name
+        self.sampling_params = sampling_params
 
-    async def run(
-        self, state: TheoremForgeState, formal_statement: str, **kwargs
-    ) -> Tuple[TheoremForgeState, ProverTrace]:
-        prompt = env.get_template("proof_attempt.j2").render(
-            formal_statement=formal_statement
-        )
-        response = await self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            **kwargs,
-        )
-        codes = [
-            extract_lean_code(choice.message.content) for choice in response.choices
-        ]
-        trace = ProverTrace(
-            step="first_attempt",
-            agent_name="prover_agent",
-            prompt=prompt,
-            output=[choice.message.content for choice in response.choices],
-            formal_statement=formal_statement,
-            output_code=codes,
-        )
-        state.trace.append(trace)
-        valid_flag = False
-        failed_code = []
-        for code in codes:
-            if not code:
-                continue
-            state, verifier_trace = await self.subagents["verifier_agent"].run(
-                state, code, False
-            )
-            if verifier_trace.valid:
-                valid_flag = True
-                state.formal_proof = code
-                state.result = "success"
-                state.stage = "finished"
-            else:
-                failed_code.append((code, verifier_trace.error_str))
+    async def run(self):
+        while True:
+            try:
+                state = await self.task_queue.get()
+                logger.info(f"Prover Agent: Start to process state {state.id}")
 
-        if not valid_flag:
+                # Check black_list with lock
+                async with self.context.black_list_lock:
+                    is_blacklisted = state.id in self.context.black_list
 
-            async def self_correction_handler(
-                state: TheoremForgeState, code: str, error_str: str
-            ):
-                state, self_correction_trace = await self.subagents[
-                    "self_correction_agent"
-                ].run(state, code, error_str, max_tokens=8192)
-                if not self_correction_trace.output_code:
-                    return state, None
-                state, verifier_trace = await self.subagents["verifier_agent"].run(
-                    state, self_correction_trace.output_code, False
-                )
-                return state, verifier_trace
-
-            jobs = [
-                asyncio.create_task(self_correction_handler(state, code, error_str))
-                for code, error_str in failed_code
-            ]
-            results = await asyncio.gather(*jobs)
-            for result in results:
-                state, verifier_trace = result
-                if not verifier_trace:
+                if is_blacklisted:
+                    logger.debug(f"Prover Agent: State {state.id} is blacklisted, routing to finish")
+                    await self.add_state_request("finish_agent", state)
                     continue
-                if verifier_trace.valid:
-                    valid_flag = True
-                    state.formal_proof = verifier_trace.code
-                    state.result = "success"
-                    state.stage = "finished"
-                    break
 
-        if not valid_flag:
-            logger.info(
-                "Prover Agent: First attempt failed. Moving to problem decomposition."
-            )
-            state.stage = "problem_decoposition"
-        else:
-            logger.info("Prover Agent: First attempt successful")
-        return state, trace
+                prompt = prompt_manager.proof_attempt(state.formal_statement)
+
+                response = await self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        }
+                    ],
+                    **self.sampling_params,
+                )
+                codes = [
+                    extract_lean_code(choice.message.content) for choice in response.choices
+                ]
+                logger.debug(
+                    f"Prover Agent: Generated {len(codes)} codes for state {state.id}"
+                )
+
+                if not any(codes):
+                    logger.info(
+                        f"Prover Agent: Failed to generate formal proof for state {state.id}"
+                    )
+                    await self.add_state_request("theorem_retrieval_agent", state)
+                    continue
+
+                valid_flag = False
+                failed_proofs = []
+                for i, code in enumerate(codes):
+                    if valid_flag:
+                        break
+
+                    if not code:
+                        continue
+
+                    valid, messages, error_str = await self.context.verifier.verify(
+                        code, False
+                    )
+                    if valid:
+                        logger.info(
+                            f"Prover Agent: Successfully generated formal proof for state {state.id}"
+                        )
+                        state.formal_proof = code
+                        state.success = True
+                        valid_flag = True
+                        await self.add_state_request("finish_agent", state)
+                    else:
+                        failed_proofs.append((code, error_str))
+
+                    await self.db.provertrace.create(
+                        data={
+                            "prompt": prompt,
+                            "output": response.choices[i].message.content,
+                            "formalStatement": state.formal_statement,
+                            "outputCode": code,
+                            "valid": valid,
+                            "errorMessage": error_str,
+                            "stateId": state.id,
+                        }
+                    )
+
+                logger.debug(f"Prover Agent: Finished processing {len(codes)} codes, valid_flag={valid_flag}, failed_proofs={len(failed_proofs)}")
+
+                if not valid_flag:
+                    if failed_proofs:
+                        logger.info(
+                            f"Prover Agent: All codes failed for state {state.id}, routing to self_correction"
+                        )
+                        state.metadata["failed_attempt"] = {
+                            "code": failed_proofs[0][0],
+                            "error_str": failed_proofs[0][1],
+                            "type": "proof_generation",
+                        }
+                        await self.add_state_request("self_correction_agent", state)
+                        logger.debug(f"Prover Agent: Successfully routed state {state.id} to self_correction")
+                    else:
+                        # All codes were None/empty, route directly to theorem retrieval
+                        logger.info(
+                            f"Prover Agent: No valid codes generated for state {state.id}, routing to theorem_retrieval"
+                        )
+                        await self.add_state_request("theorem_retrieval_agent", state)
+                        logger.debug(f"Prover Agent: Successfully routed state {state.id} to theorem_retrieval")
+
+            except Exception as e:
+                logger.error(f"Prover Agent: Error processing state: {e}")
+                import traceback
+                traceback.print_exc()
+                # Try to route to finish even on error
+                try:
+                    if 'state' in locals():
+                        await self.add_state_request("finish_agent", state)
+                except Exception:
+                    pass

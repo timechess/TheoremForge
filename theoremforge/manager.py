@@ -1,90 +1,112 @@
 """
-Optimized TheoremForge State Manager (V2).
+TheoremForge State Manager - Agent-Based Architecture
 
-This is a fully async, high-performance version of the TheoremForge manager that:
-- Continuously accepts new requests
-- Processes multiple states concurrently
-- Uses dependency injection for better modularity
-- Provides real-time state persistence
-- Includes comprehensive error handling
+This manager orchestrates multiple autonomous agents that communicate via queues.
+Each agent processes states independently and routes them to other agents as needed.
 """
 
 import asyncio
-import json
-from pathlib import Path
-from typing import Optional, Callable, Dict, Any
-from hashlib import sha256
+import os
+from uuid import uuid4
+from typing import Optional, Dict, Any, Callable
 from loguru import logger
-
-from theoremforge.state import TheoremForgeState
-from theoremforge.async_queue_manager import AsyncQueueManager
-from theoremforge.agent_factory import AgentFactory
-from theoremforge.retry_handler import RetryHandler, RetryConfig
-from theoremforge.config import config
 from dotenv import load_dotenv
+
+from theoremforge.state import TheoremForgeState, TheoremForgeContext
+from theoremforge.agents.prover_agent import ProverAgent
+from theoremforge.agents.self_correction_agent import SelfCorrectionAgent
+from theoremforge.agents.proof_sketch_agent import ProofSketchAgent
+from theoremforge.agents.proof_assembly_agent import ProofAssemblyAgent
+from theoremforge.agents.subgoal_extraction_agent import SubgoalExtractionAgent
+from theoremforge.agents.informal_proof_agent import InformalProofAgent
+from theoremforge.agents.theorem_retrieval_agent import TheoremRetrievalAgent
+from theoremforge.agents.finish_agent import FinishAgent
+from theoremforge.config import config
+from theoremforge.db import MongoDBClient
 
 load_dotenv()
 
+
 class TheoremForgeStateManager:
     """
-    Optimized async state manager for TheoremForge.
+    Agent-based state manager for TheoremForge.
 
-    Key improvements:
-    - Fully async with concurrent processing
-    - Continuous request acceptance
-    - Modular agent management via factory
-    - Real-time state persistence
-    - Comprehensive error handling and logging
-    - Graceful shutdown
+    Architecture:
+    - Each agent has its own task queue and runs continuously
+    - Agents communicate by routing states to each other
+    - Shared context provides access to db, verifier, and inter-agent communication
+    - Manager handles agent lifecycle and statistics tracking
     """
 
     def __init__(
         self,
-        max_workers: int = 5,
-        output_file: str = "state_trace.jsonl",
+        max_workers: int,
         custom_config: Optional[Dict[str, Any]] = None,
         state_callback: Optional[Callable[[TheoremForgeState], None]] = None,
-        enable_retry: bool = True,
-        retry_config: Optional[RetryConfig] = None
     ):
         """
         Initialize the state manager.
 
         Args:
-            max_workers: Maximum concurrent workers per stage
-            output_file: Path to output file for state traces
+            verifier_url: URL of the Lean verification server
+            retriever_url: URL of the theorem retrieval server
             custom_config: Optional custom configuration
-            state_callback: Optional custom callback for state persistence
-            enable_retry: Whether to enable retry logic for failed operations
-            retry_config: Custom retry configuration (uses defaults if None)
+            state_callback: Optional callback for finished states
         """
         self.max_workers = max_workers
-        self.output_file = Path(output_file)
-        self.custom_config = custom_config
-        self.enable_retry = enable_retry
+        self.custom_config = custom_config or {}
+        self.state_callback = state_callback
 
-        # Initialize retry handler
-        if enable_retry:
-            self.retry_handler = RetryHandler(retry_config or RetryConfig(
-                max_retries=2,
-                initial_delay=2.0,
-                max_delay=30.0
-            ))
-        else:
-            self.retry_handler = None
-
-        # Initialize agent factory
-        self.agent_factory = AgentFactory(custom_config)
-        self.agent_factory.initialize()
-
-        # Initialize queue manager
-        self.queue_manager = AsyncQueueManager(
-            max_workers=max_workers,
-            state_callback=state_callback or self._default_state_callback
+        # Get configurations
+        lean_config = self.custom_config.get("lean_server") or config.lean_server
+        prover_config = self.custom_config.get("prover_agent") or config.prover_agent
+        self_correction_config = (
+            self.custom_config.get("self_correction_agent")
+            or config.self_correction_agent
+        )
+        informal_config = (
+            self.custom_config.get("informal_proof_agent")
+            or config.informal_proof_agent
+        )
+        sketch_config = (
+            self.custom_config.get("proof_sketch_agent") or config.proof_sketch_agent
+        )
+        retriever_config = (
+            self.custom_config.get("theorem_retriever_agent")
+            or config.theorem_retrieval_agent
+        )
+        assembly_config = (
+            self.custom_config.get("proof_assembly_agent")
+            or config.proof_assembly_agent
         )
 
-        # Register stage handlers
-        self._register_handlers()
+        # Resolve URLs
+        self.verifier_url = (
+            f"http://localhost:{lean_config.get('LeanServerPort', 8000)}"
+        )
+        self.retriever_url = retriever_config.get(
+            "retriever_url", "http://localhost:8002"
+        )
+
+        # Initialize context
+        self.context = TheoremForgeContext(verifier_url=self.verifier_url)
+
+        # Initialize shared MongoDB client
+        self.context.db = MongoDBClient()
+
+        # Initialize agents
+        self._initialize_agents(
+            prover_config,
+            self_correction_config,
+            informal_config,
+            sketch_config,
+            retriever_config,
+            assembly_config,
+        )
+
+        # Agent tasks for lifecycle management
+        self.agent_tasks = []
+        self._running = False
 
         # Statistics
         self.stats = {
@@ -92,126 +114,173 @@ class TheoremForgeStateManager:
             "total_finished": 0,
             "successful": 0,
             "failed": 0,
-            "retried": 0
         }
         self._stats_lock = asyncio.Lock()
 
-        # Output file setup
-        self._ensure_output_file()
+        # Finish agent callback
+        self._setup_finish_callback()
 
-        logger.info(
-            f"TheoremForge Manager V2 initialized with {max_workers} workers per stage"
-            f"{' (retry enabled)' if enable_retry else ''}"
+        logger.info("TheoremForge Manager initialized with agent-based architecture")
+
+    def _initialize_agents(
+        self,
+        prover_config,
+        self_correction_config,
+        informal_config,
+        sketch_config,
+        retriever_config,
+        assembly_config,
+    ):
+        """Initialize all agents and register them in the context."""
+        logger.info("Initializing agents...")
+        openai_api_key = os.getenv("CLOSEAI_API_KEY", "EMPTY")
+        # Get API keys and credentials
+        prover_url = prover_config.get("base_url", "http://localhost:8001/v1")
+        prover_model = prover_config.get("model", "model/Goedel-Prover-V2-32B")
+        prover_sampling = prover_config.get("sampling_params", {})
+
+        self_correction_url = self_correction_config.get(
+            "base_url", "https://api.openai-proxy.org/v1"
         )
+        self_correction_model = self_correction_config.get("model", "gpt-5-chat-latest")
+        self_correction_sampling = self_correction_config.get("sampling_params", {})
 
-    def _ensure_output_file(self):
-        """Ensure output file exists and is writable."""
-        self.output_file.parent.mkdir(parents=True, exist_ok=True)
-        # Create/clear the file
-        self.output_file.touch()
+        informal_url = informal_config.get(
+            "base_url", "https://api.openai-proxy.org/v1"
+        )
+        informal_model = informal_config.get("model", "gpt-5-chat-latest")
+        informal_sampling = informal_config.get("sampling_params", {})
 
-    def _register_handlers(self):
-        """Register all stage handlers with the queue manager."""
-        agents = self.agent_factory.get_all_agents()
+        sketch_url = sketch_config.get("base_url", "https://api.openai-proxy.org/v1")
+        sketch_model = sketch_config.get("model", "gpt-5-chat-latest")
+        sketch_sampling = sketch_config.get("sampling_params", {})
 
-        # Wrapper to add retry logic
-        async def with_retry(handler_func, state, *args, **kwargs):
-            if self.enable_retry and self.retry_handler:
-                try:
-                    result = await self.retry_handler.execute_with_retry(
-                        handler_func, state, *args, **kwargs
-                    )
-                    return result
-                except Exception:
-                    # All retries exhausted
-                    async with self._stats_lock:
-                        self.stats["retried"] += 1
-                    raise
-            else:
-                return await handler_func(state, *args, **kwargs)
+        retriever_model_url = retriever_config.get(
+            "base_url", "https://api.openai-proxy.org/v1"
+        )
+        retriever_model = retriever_config.get("model", "gpt-5-mini")
+        retriever_sampling = retriever_config.get("sampling_params", {})
 
-        # First attempt stage
-        async def first_attempt_handler_impl(state: TheoremForgeState):
-            prover_config = config.prover_agent
-            return await agents['prover'].run(
-                state,
-                state.formal_statement,
-                **prover_config.get("sampling_params", {})
+        assembly_url = assembly_config.get(
+            "base_url", "https://api.openai-proxy.org/v1"
+        )
+        assembly_model = assembly_config.get("model", "gpt-5-chat-latest")
+        assembly_sampling = assembly_config.get("sampling_params", {})
+
+        # Create all agents
+        self.context.agents["prover_agent"] = [
+            ProverAgent(
+                context=self.context,
+                base_url=prover_url,
+                api_key="EMPTY",
+                model_name=prover_model,
+                sampling_params=prover_sampling,
             )
+            for _ in range(self.max_workers)
+        ]
 
-        async def first_attempt_handler(state: TheoremForgeState):
-            return await with_retry(first_attempt_handler_impl, state)
-
-        # Problem decomposition stage
-        async def problem_decomposition_handler_impl(state: TheoremForgeState):
-            decomp_config = config.decomposition_agent
-            return await agents['decomposition'].run(
-                state,
-                state.formal_statement,
-                **decomp_config.get("sampling_params", {})
+        self.context.agents["self_correction_agent"] = [
+            SelfCorrectionAgent(
+                context=self.context,
+                base_url=self_correction_url,
+                api_key=openai_api_key,
+                model_name=self_correction_model,
+                sampling_params=self_correction_sampling,
             )
+            for _ in range(self.max_workers)
+        ]
 
-        async def problem_decomposition_handler(state: TheoremForgeState):
-            return await with_retry(problem_decomposition_handler_impl, state)
-
-        # Subgoal solving stage
-        async def subgoal_solving_handler_impl(state: TheoremForgeState):
-            prover_config = config.prover_agent
-            for i in range(len(state.subgoals)):
-                state, subgoal_solving_trace = await agents['subgoal_solving'].run(
-                    state, i, **prover_config["sampling_params"]
-                )
-                if subgoal_solving_trace.formal_proofs:
-                    return state, subgoal_solving_trace
-            state.stage = "finished"
-            state.result = "failure"
-            return state, None
-
-        async def subgoal_solving_handler(state: TheoremForgeState):
-            return await with_retry(subgoal_solving_handler_impl, state)
-
-        # Proof assembly stage
-        async def proof_assembly_handler_impl(state: TheoremForgeState):
-            decomp_config = config.decomposition_agent
-            return await agents['proof_assembly'].run(
-                state,
-                **decomp_config.get("sampling_params", {})
+        self.context.agents["informal_proof_agent"] = [
+            InformalProofAgent(
+                context=self.context,
+                base_url=informal_url,
+                api_key=openai_api_key,
+                model_name=informal_model,
+                sampling_params=informal_sampling,
             )
+            for _ in range(self.max_workers)
+        ]
 
-        async def proof_assembly_handler(state: TheoremForgeState):
-            return await with_retry(proof_assembly_handler_impl, state)
+        self.context.agents["proof_sketch_agent"] = [
+            ProofSketchAgent(
+                context=self.context,
+                base_url=sketch_url,
+                api_key=openai_api_key,
+                model_name=sketch_model,
+                sampling_params=sketch_sampling,
+            )
+            for _ in range(self.max_workers)
+        ]
 
-        self.queue_manager.register_handler("first_attempt", first_attempt_handler)
-        self.queue_manager.register_handler("problem_decoposition", problem_decomposition_handler)
-        self.queue_manager.register_handler("subgoal_solving", subgoal_solving_handler)
-        self.queue_manager.register_handler("proof_assembly", proof_assembly_handler)
+        self.context.agents["subgoal_extraction_agent"] = [
+            SubgoalExtractionAgent(
+                context=self.context,
+            )
+        ]
 
-    async def _default_state_callback(self, state: TheoremForgeState):
-        """Default callback for persisting finished states."""
-        if state.stage == "finished":
-            # Update statistics
-            async with self._stats_lock:
-                self.stats["total_finished"] += 1
-                if state.result == "success":
-                    self.stats["successful"] += 1
-                else:
-                    self.stats["failed"] += 1
+        self.context.agents["proof_assembly_agent"] = [
+            ProofAssemblyAgent(
+                context=self.context,
+                base_url=assembly_url,
+                api_key=openai_api_key,
+                model_name=assembly_model,
+                sampling_params=assembly_sampling,
+            )
+            for _ in range(self.max_workers)
+        ]
 
-            # Persist to file
-            try:
-                with open(self.output_file, 'a') as f:
-                    f.write(json.dumps(state.model_dump(), ensure_ascii=False) + "\n")
-                logger.info(
-                    f"State {state.id} finished with result: {state.result} "
-                    f"(Success: {self.stats['successful']}, Failed: {self.stats['failed']})"
-                )
-            except Exception as e:
-                logger.error(f"Error persisting state {state.id}: {e}")
+        self.context.agents["theorem_retrieval_agent"] = [
+            TheoremRetrievalAgent(
+                context=self.context,
+                base_url=retriever_model_url,
+                api_key=openai_api_key,
+                model_name=retriever_model,
+                retriever_url=self.retriever_url,
+                sampling_params=retriever_sampling,
+            )
+            for _ in range(self.max_workers)
+        ]
+
+        self.context.agents["finish_agent"] = [
+            FinishAgent(
+                context=self.context,
+            )
+        ]
+
+        logger.info(f"Initialized {len(self.context.agents)} agents")
+
+    def _setup_finish_callback(self):
+        """Setup callback to track finished states."""
+        # We'll monitor the finish_agent's activity by wrapping its queue processing
+        # This is done via a background task that monitors the record
+        pass
 
     async def start(self):
-        """Start the manager and begin processing."""
-        await self.queue_manager.start()
-        logger.info("TheoremForge Manager V2 started and ready to accept requests")
+        """Start all agents and begin processing."""
+        if self._running:
+            logger.warning("Manager already running")
+            return
+
+        logger.info("Starting TheoremForge Manager...")
+
+        # Connect to shared MongoDB database
+        await self.context.db.connect()
+        logger.info("MongoDB database connected")
+
+        # Start all agent tasks
+        for agent_name, agents in self.context.agents.items():
+            for i, agent in enumerate(agents):
+                task = asyncio.create_task(agent.run(), name=f"agent_{agent_name}_{i}")
+                self.agent_tasks.append(task)
+                logger.debug(f"Started agent: {agent_name}_{i}")
+
+        # Start statistics monitoring task
+        task = asyncio.create_task(self._monitor_stats(), name="stats_monitor")
+        self.agent_tasks.append(task)
+        logger.debug("Started statistics monitoring task")
+
+        self._running = True
+        logger.info("TheoremForge Manager started - all agents running")
 
     async def stop(self, timeout: Optional[float] = 60.0):
         """
@@ -220,28 +289,110 @@ class TheoremForgeStateManager:
         Args:
             timeout: Maximum time to wait for completion (seconds)
         """
-        logger.info("Stopping TheoremForge Manager V2...")
-        await self.queue_manager.stop(timeout=timeout)
+        if not self._running:
+            logger.warning("Manager not running")
+            return
+
+        logger.info("Stopping TheoremForge Manager...")
+        self._running = False
+
+        # Cancel all agent tasks
+        for task in self.agent_tasks:
+            task.cancel()
+
+        # Wait for tasks to complete with timeout
+        if self.agent_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.agent_tasks, return_exceptions=True),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Some agent tasks did not complete within timeout")
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")
+
+        # Disconnect shared MongoDB database
+        try:
+            await self.context.db.disconnect()
+            logger.info("MongoDB database disconnected")
+        except Exception as e:
+            logger.error(f"Error disconnecting MongoDB database: {e}")
+
         self._print_final_stats()
-        logger.info("TheoremForge Manager V2 stopped")
+        logger.info("TheoremForge Manager stopped")
+
+    async def _monitor_stats(self):
+        """Monitor and update statistics by tracking the record dictionary."""
+        try:
+            last_record_size = 0
+            while self._running:
+                await asyncio.sleep(2.0)
+
+                # Access record and root_state_ids with locks
+                async with self.context.record_lock:
+                    async with self.context.root_state_ids_lock:
+                        # Only count root states (manually submitted), not subgoals
+                        root_states_in_record = {
+                            state_id for state_id in self.context.record.keys()
+                            if state_id in self.context.root_state_ids
+                        }
+                        current_size = len(root_states_in_record)
+
+                        if current_size > last_record_size:
+                            # New root states finished
+                            finished_count = current_size - last_record_size
+
+                            # Count successes (non-None entries in record for root states)
+                            successful = sum(
+                                1 for state_id in root_states_in_record
+                                if self.context.record[state_id] is not None
+                            )
+                            failed = len(root_states_in_record) - successful
+
+                            async with self._stats_lock:
+                                self.stats["total_finished"] += finished_count
+                                self.stats["successful"] = successful
+                                self.stats["failed"] = failed
+
+                            last_record_size = current_size
+
+        except asyncio.CancelledError:
+            logger.debug("Stats monitor cancelled")
+        except Exception as e:
+            logger.error(f"Error in stats monitor: {e}")
 
     def _print_final_stats(self):
         """Print final statistics."""
+        # Calculate total states including subgoals
+        total_states_in_record = len(self.context.record)
+        root_states_in_record = len([
+            state_id for state_id in self.context.record.keys()
+            if state_id in self.context.root_state_ids
+        ])
+        subgoals_in_record = total_states_in_record - root_states_in_record
+
         logger.info("=" * 60)
         logger.info("Final Statistics:")
-        logger.info(f"  Total Submitted: {self.stats['total_submitted']}")
-        logger.info(f"  Total Finished: {self.stats['total_finished']}")
-        logger.info(f"  Successful: {self.stats['successful']}")
-        logger.info(f"  Failed: {self.stats['failed']}")
-        if self.stats['total_finished'] > 0:
-            success_rate = (self.stats['successful'] / self.stats['total_finished']) * 100
-            logger.info(f"  Success Rate: {success_rate:.2f}%")
+        logger.info(f"  Root States (Manually Submitted): {self.stats['total_submitted']}")
+        logger.info(f"  Root States Finished: {self.stats['total_finished']}")
+        logger.info(f"  Root States Successful: {self.stats['successful']}")
+        logger.info(f"  Root States Failed: {self.stats['failed']}")
+        if self.stats["total_finished"] > 0:
+            success_rate = (
+                self.stats["successful"] / self.stats["total_finished"]
+            ) * 100
+            logger.info(f"  Root State Success Rate: {success_rate:.2f}%")
+        logger.info(f"  Subgoals Generated & Finished: {subgoals_in_record}")
+        logger.info(f"  Total States in Record: {total_states_in_record}")
+        logger.info(f"  States in blacklist: {len(self.context.black_list)}")
         logger.info("=" * 60)
 
     async def submit_formal_statement(
         self,
         formal_statement: str,
-        header: Optional[str] = None
+        header: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> str:
         """
         Submit a new formal statement for proving.
@@ -249,33 +400,49 @@ class TheoremForgeStateManager:
         Args:
             formal_statement: The formal statement to prove
             header: Optional custom header (defaults to config)
+            metadata: Optional metadata dictionary
 
         Returns:
             The unique ID of the submitted theorem
         """
-        theorem_hash = sha256(formal_statement.encode("utf-8")).hexdigest()[:12]
+        if not self._running:
+            raise RuntimeError("Manager not running. Call start() first.")
+
+        theorem_id = str(uuid4())
         new_state = TheoremForgeState(
-            id=theorem_hash,
+            id=theorem_id,
             formal_statement=formal_statement,
-            header=header if header else config.lean_server["LeanServerHeader"],
-            stage="first_attempt",
-            result="not_finished",
-            trace=[],
+            header=header
+            or config.lean_server.get("LeanServerHeader", "import Mathlib\n"),
+            depth=0,
+            success=False,
+            metadata=metadata or {},
         )
 
-        await self.queue_manager.add_request("first_attempt", new_state)
+        # Submit to prover agent (entry point)
+        task_queue_lengths = [
+            agent.task_queue.qsize() for agent in self.context.agents["prover_agent"]
+        ]
+        min_index = task_queue_lengths.index(min(task_queue_lengths))
+        await self.context.agents["prover_agent"][min_index].task_queue.put(new_state)
+
+        # Track this as a root state
+        async with self.context.root_state_ids_lock:
+            self.context.root_state_ids.add(theorem_id)
 
         async with self._stats_lock:
             self.stats["total_submitted"] += 1
 
-        logger.info(f"Submitted theorem {theorem_hash} (Total: {self.stats['total_submitted']})")
-        return theorem_hash
+        logger.info(
+            f"Submitted theorem {theorem_id} (Total: {self.stats['total_submitted']})"
+        )
+        return theorem_id
 
     async def submit_multiple(
         self,
         formal_statements: list[str],
         header: Optional[str] = None,
-        batch_size: int = 10
+        batch_size: int = 10,
     ) -> list[str]:
         """
         Submit multiple formal statements.
@@ -291,25 +458,42 @@ class TheoremForgeStateManager:
         theorem_ids = []
 
         for i in range(0, len(formal_statements), batch_size):
-            batch = formal_statements[i:i+batch_size]
-            batch_ids = await asyncio.gather(*[
-                self.submit_formal_statement(stmt, header)
-                for stmt in batch
-            ])
+            batch = formal_statements[i : i + batch_size]
+            batch_ids = await asyncio.gather(
+                *[self.submit_formal_statement(stmt, header) for stmt in batch]
+            )
             theorem_ids.extend(batch_ids)
 
         logger.info(f"Submitted {len(theorem_ids)} theorems in total")
         return theorem_ids
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
-        queue_stats = self.queue_manager.get_stats()
+        async with self.context.record_lock:
+            total_record_len = len(self.context.record)
+
+            async with self.context.root_state_ids_lock:
+                root_states_count = len([
+                    state_id for state_id in self.context.record.keys()
+                    if state_id in self.context.root_state_ids
+                ])
+
+        async with self.context.black_list_lock:
+            blacklist_len = len(self.context.black_list)
+
         return {
             **self.stats,
-            **queue_stats
+            "queue_sizes": {
+                name: [a.task_queue.qsize() for a in agent]
+                for name, agent in self.context.agents.items()
+            },
+            "blacklist_size": blacklist_len,
+            "record_size": total_record_len,
+            "root_states_finished": root_states_count,
+            "subgoals_finished": total_record_len - root_states_count,
         }
 
-    async def wait_for_completion(self, check_interval: float = 1.0):
+    async def wait_for_completion(self, check_interval: float = 2.0):
         """
         Wait for all queued items to complete processing.
 
@@ -320,22 +504,34 @@ class TheoremForgeStateManager:
         prev_finished = 0
 
         while True:
-            stats = self.get_stats()
-            queue_sizes = stats['queue_sizes']
-            active = stats['active_tasks']
-            finished = stats['total_finished']
+            stats = await self.get_stats()
+            queue_sizes = stats["queue_sizes"]
+            finished = stats["total_finished"]
+            submitted = stats["total_submitted"]
 
-            # Check if all queues are empty and no active tasks
-            if all(size == 0 for size in queue_sizes.values()) and active == 0:
-                if stats['total_submitted'] == finished:
+            # Check if all queues are empty (except finish_agent which might have pending writes)
+            active_queues = {
+                name: size
+                for name, size in queue_sizes.items()
+                if any(s > 0 for s in size) and name != "finish_agent"
+            }
+
+            # If no active queues and we've processed everything submitted
+            if not active_queues and finished >= submitted:
+                # Give finish_agent time to drain
+                await asyncio.sleep(1.0)
+                stats = await self.get_stats()
+                if all(size == 0 for size in stats["queue_sizes"].get("finish_agent", [])):
                     break
 
             # Log progress
             if finished > prev_finished:
                 logger.info(
-                    f"Progress: {finished}/{stats['total_submitted']} completed "
+                    f"Progress: {finished}/{submitted} completed "
                     f"({stats['successful']} successful, {stats['failed']} failed)"
                 )
+                if active_queues:
+                    logger.debug(f"Active queues: {active_queues}")
                 prev_finished = finished
 
             await asyncio.sleep(check_interval)
@@ -346,20 +542,18 @@ class TheoremForgeStateManager:
 # Convenience function for backward compatibility
 async def run_theorem_forge(
     formal_statements: list[str],
-    max_workers: int = 5,
-    output_file: str = "state_trace.jsonl"
+    max_workers: int,
 ):
     """
     Convenience function to run TheoremForge with a list of statements.
 
     Args:
         formal_statements: List of formal statements to prove
-        max_workers: Maximum concurrent workers per stage
-        output_file: Output file path
+        verifier_url: URL of the verification server
+        retriever_url: URL of the retrieval server
     """
     manager = TheoremForgeStateManager(
         max_workers=max_workers,
-        output_file=output_file
     )
 
     await manager.start()
@@ -374,4 +568,3 @@ async def run_theorem_forge(
     finally:
         # Graceful shutdown
         await manager.stop()
-

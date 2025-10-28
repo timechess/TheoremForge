@@ -1,6 +1,7 @@
 import re
 from typing import Optional, List
 
+
 def extract_lean_code(text: str) -> str:
     pattern = r"```lean4\n(.*?)\n```"
     matches = re.findall(pattern, text, re.DOTALL)
@@ -25,7 +26,9 @@ informal_description: {payload["informal_description"]}
 """
 
 
-def get_error_str(code: str, errors: List[dict], error_thres: Optional[int] = None) -> str:
+def get_error_str(
+    code: str, errors: List[dict], error_thres: Optional[int] = None
+) -> str:
     err_str = ""
     code_lines = code.split("\n")
     # token_lengths = [len(line) + 1 for line in code_lines]

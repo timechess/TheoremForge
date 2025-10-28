@@ -32,7 +32,13 @@ def erase_header(code: str) -> str:
         str: The code with all import statements removed.
     """
     import_pattern = re.compile(r"^import\s+.*$", re.MULTILINE)
-    return re.sub(import_pattern, "", code)
+    open_pattern = re.compile(r"^open\s+.*$", re.MULTILINE)
+    set_option_pattern = re.compile(r"^set_option\s+.*$", re.MULTILINE)
+    return re.sub(
+        import_pattern,
+        "",
+        re.sub(open_pattern, "", re.sub(set_option_pattern, "", code)),
+    )
 
 
 def normalize_header(code: str) -> str:
@@ -46,7 +52,13 @@ def normalize_header(code: str) -> str:
         str: The code with standardized import statements.
     """
     import_pattern = re.compile(r"^import\s+.*$", re.MULTILINE)
-    normalized_code = re.sub(import_pattern, HEADER, code)
+    open_pattern = re.compile(r"^open\s+.*$", re.MULTILINE)
+    set_option_pattern = re.compile(r"^set_option\s+.*$", re.MULTILINE)
+    normalized_code = re.sub(
+        import_pattern,
+        HEADER,
+        re.sub(open_pattern, "", re.sub(set_option_pattern, "", code)),
+    )
     return normalized_code
 
 

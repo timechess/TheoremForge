@@ -1,48 +1,59 @@
 from theoremforge.agents.base_agent import BaseAgent
-from theoremforge.lean_server.client import RemoteVerifier
-from theoremforge.state import TheoremForgeState, SubgoalExtractionTrace
-from typing import Tuple, List
+from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from loguru import logger
+from uuid import uuid4
 
 
 class SubgoalExtractionAgent(BaseAgent):
-    def __init__(self, verifier_url: str):
-        super().__init__(
-            agent_name="subgoal_extraction_agent",
-            subagents=[],
-        )
-        self.verifier = RemoteVerifier(verifier_url)
+    def __init__(self, context: TheoremForgeContext):
+        super().__init__(agent_name="subgoal_extraction_agent", context=context)
 
-    async def run(
-        self, state: TheoremForgeState, codes: List[str], **kwargs
-    ) -> Tuple[TheoremForgeState, SubgoalExtractionTrace]:
-        all_subgoals = []
-        for i, code in enumerate(codes):
-            subgoals = await self.verifier.extract_subgoals(code)
-            if not subgoals:
-                state.proof_sketch.pop(i)
+    async def run(self):
+        while True:
+            try:
+                state = await self.task_queue.get()
                 logger.info(
-                    f"Subgoal Extraction Agent: Subgoal extraction failed for code {i}. Removing proof sketch."
+                    f"Subgoal Extraction Agent: Start to process state {state.id}"
                 )
-                continue
-            all_subgoals.append(subgoals)
-        trace = SubgoalExtractionTrace(
-            step="subgoal_extraction",
-            agent_name="subgoal_extraction_agent",
-            proof_sketch=codes,
-            subgoals=all_subgoals,
-        )
-        state.trace.append(trace)
-        state.subgoals = all_subgoals
-        if not all_subgoals:
-            logger.info(
-                "Subgoal Extraction Agent: Subgoal extraction failed. Moving to finished."
-            )
-            state.stage = "finished"
-            state.result = "failure"
-            return state, None
-        logger.info(
-            f"Subgoal Extraction Agent: Subgoal extraction successful. Extracted {len(all_subgoals)} subgoals."
-        )
-        state.stage = "subgoal_solving"
-        return state, trace
+
+                # Check black_list with lock
+                async with self.context.black_list_lock:
+                    is_blacklisted = state.id in self.context.black_list
+
+                if is_blacklisted:
+                    await self.add_state_request("finish_agent", state)
+                    continue
+                subgoals = await self.context.verifier.extract_subgoals(
+                    state.proof_sketch
+                )
+                if not subgoals:
+                    logger.info(
+                        f"Subgoal Extraction Agent: No subgoals found for state {state.id}"
+                    )
+                    await self.add_state_request("finish_agent", state)
+                    continue
+                logger.info(
+                    f"Subgoal Extraction Agent: Found {len(subgoals)} subgoals for state {state.id}"
+                )
+                subgoal_ids = [str(uuid4()) for _ in subgoals]
+                for subgoal_id, subgoal in zip(subgoal_ids, subgoals):
+                    new_state = TheoremForgeState(
+                        id=subgoal_id,
+                        formal_statement=subgoal,
+                        parent_id=state.id,
+                        siblings=subgoal_ids,
+                        depth=state.depth + 1,
+                    )
+                    await self.add_state_request("prover_agent", new_state)
+                state.subgoals = subgoal_ids
+                await self.add_state_request("proof_assembly_agent", state)
+            except Exception as e:
+                logger.error(f"Subgoal Extraction Agent: Error processing state: {e}")
+                import traceback
+
+                traceback.print_exc()
+                try:
+                    if "state" in locals():
+                        await self.add_state_request("finish_agent", state)
+                except Exception:
+                    pass
