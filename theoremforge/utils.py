@@ -3,20 +3,42 @@ from typing import Optional, List
 
 
 def extract_lean_code(text: str) -> str:
-    pattern = r"```lean4\n(.*?)\n```"
+    # Match ```lean4 followed by content and closing ```
+    # The (?:\r?\n) handles different line endings
+    # Strip whitespace from captured content
+    pattern = r"```lean4(?:\r?\n)(.*?)(?:\r?\n)?```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
-        return matches[-1]
-    pattern = r"```lean4\n(.*?)```"
+        return matches[-1].strip()
+    
+    # Fallback: try with ```lean tag
+    pattern = r"```lean(?:\r?\n)(.*?)(?:\r?\n)?```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
-        return matches[-1]
-    pattern = r"```lean\n(.*?)```"
-    matches = re.findall(pattern, text, re.DOTALL)
-    if matches:
-        return matches[-1]
+        return matches[-1].strip()
+    
     return None
 
+def remove_comments(text): # remove comments
+    # First remove all /- ... -/ blocks
+    text = re.sub(r'/-.*?-/', '', text, flags=re.DOTALL)
+    # text = re.sub(r'/- (?!special open -/).*?-/', '', text, flags=re.DOTALL)
+    # text = re.sub(r'/-{1,2} (?!special open -/).*?-{1,2}/', '', text, flags=re.DOTALL)
+    # Then remove -- comments from each line
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Split on -- and keep only the first part
+        cleaned_line = line.split('--', 1)[0]
+        if "--" in line:
+            cleaned_lines.append(cleaned_line.rstrip())
+        else:
+            cleaned_lines.append(cleaned_line)
+    # Join back together and remove excessive empty lines
+    cleaned_text = '\n'.join(cleaned_lines)
+    # Remove multiple consecutive empty lines
+    # cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
+    return cleaned_text.strip()
 
 def payload_to_string(payload: dict) -> str:
     return f"""full_name: {payload["name"]}

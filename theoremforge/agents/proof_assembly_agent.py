@@ -32,17 +32,22 @@ class ProofAssemblyAgent(BaseAgent):
 
                 # Check black_list with lock
                 async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list
+                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
 
                 if is_blacklisted:
-                    logger.debug(f"Proof Assembly Agent: State {state.id} is blacklisted, routing to finish")
+                    logger.debug(
+                        f"Proof Assembly Agent: State {state.id} is blacklisted, routing to finish"
+                    )
                     await self.add_state_request("finish_agent", state)
                     continue
 
                 # Check if subgoals are ready in record
                 async with self.context.record_lock:
-                    subgoals_in_record = any(
-                        [subgoal_id in self.context.record for subgoal_id in state.subgoals]
+                    subgoals_in_record = all(
+                        [
+                            subgoal_id in self.context.proof_record
+                            for subgoal_id in state.subgoals
+                        ]
                     )
                     all_subgoals_ready = False
                     subgoal_proofs = []
@@ -50,14 +55,18 @@ class ProofAssemblyAgent(BaseAgent):
                     if subgoals_in_record:
                         all_subgoals_ready = all(
                             [
-                                subgoal_id in self.context.record
-                                and self.context.record[subgoal_id]
+                                subgoal_id in self.context.proof_record
+                                and self.context.proof_record[subgoal_id]
                                 for subgoal_id in state.subgoals
                             ]
                         )
                         if all_subgoals_ready:
                             subgoal_proofs = [
-                                self.context.record[subgoal_id]
+                                self.context.proof_record[subgoal_id]
+                                for subgoal_id in state.subgoals
+                            ]
+                            subgoal_statements = [
+                                self.context.statement_record[subgoal_id]
                                 for subgoal_id in state.subgoals
                             ]
 
@@ -70,7 +79,7 @@ class ProofAssemblyAgent(BaseAgent):
                         prompt = prompt_manager.proof_assembly(
                             state.formal_statement,
                             state.proof_sketch,
-                            "\n".join(subgoal_proofs),
+                            "\n".join(subgoal_statements),
                         )
                         response = await self.client.chat.completions.create(
                             model=self.model_name,
@@ -82,20 +91,21 @@ class ProofAssemblyAgent(BaseAgent):
                         content = response.choices[0].message.content
                         code = extract_lean_code(content)
                         if code:
-                            valid, messages, error_str = await self.context.verifier.verify(
-                                code, False
-                            )
+                            (
+                                valid,
+                                messages,
+                                error_str,
+                            ) = await self.context.verifier.verify("\n".join(subgoal_proofs + [code]), False)
                             if valid:
-                                state.formal_proof = code
+                                state.formal_proof = "\n".join(subgoal_proofs + [code])
                                 state.success = True
                                 await self.add_state_request("finish_agent", state)
                             else:
-                                state.metadata["failed_attempt"] = {
-                                    "code": code,
-                                    "error_str": error_str,
-                                    "type": "proof_assembly",
-                                }
-                                await self.add_state_request("self_correction_agent", state)
+                                logger.info(
+                                    f"Proof Assembly Agent: Assembly failed for state {state.id}, routing to finish_agent"
+                                )
+                                await self.add_state_request("finish_agent", state)
+
                             await self.db.proofassemblytrace.create(
                                 data={
                                     "prompt": prompt,
@@ -139,6 +149,7 @@ class ProofAssemblyAgent(BaseAgent):
             except Exception as e:
                 logger.error(f"Proof Assembly Agent: Error processing state: {e}")
                 import traceback
+
                 traceback.print_exc()
                 try:
                     if "state" in locals():

@@ -112,6 +112,7 @@ def get_embeddings(
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_name", type=str, required=True)
+    parser.add_argument("--model_name", type=str, default="all-mpnet-base-v2")
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size for embedding generation"
     )
@@ -126,7 +127,7 @@ async def main():
     client = QdrantClient(url="http://localhost:6333")
 
     # Model configuration
-    model_name = "all-mpnet-base-v2"
+    model_name = args.model_name
 
     # Check GPU availability and configuration
     num_gpus = torch.cuda.device_count()
@@ -147,11 +148,22 @@ async def main():
     print(
         f"Creating collection with fixed vector size {model.get_sentence_embedding_dimension()}"
     )
-    if client.collection_exists("lean-search-server"):
-        client.delete_collection("lean-search-server")
+    if client.collection_exists("theorem"):
+        client.delete_collection("theorem")
 
     client.create_collection(
-        collection_name="lean-search-server",
+        collection_name="theorem",
+        vectors_config=models.VectorParams(
+            size=model.get_sentence_embedding_dimension(),
+            distance=models.Distance.COSINE,
+        ),
+    )
+
+    if client.collection_exists("definition"):
+        client.delete_collection("definition")
+
+    client.create_collection(
+        collection_name="definition",
         vectors_config=models.VectorParams(
             size=model.get_sentence_embedding_dimension(),
             distance=models.Distance.COSINE,
@@ -159,21 +171,38 @@ async def main():
     )
     del model
 
-    texts = []
-    metadata = []
+    theorem_texts = []
+    definition_texts = []
+    theorem_metadata = []
+    definition_metadata = []
 
     print("Loading documents...")
     dataset = load_dataset(args.dataset_name)
     for doc in dataset["train"]:
-        texts.append(doc["informal_description"])
-        metadata.append(
-            {
-                "name": ".".join(doc["name"]),
-                "type": doc["type"],
-                "informal_name": doc["informal_name"],
-                "informal_description": doc["informal_description"],
-            }
-        )
+        if "Mathlib" in doc["name"] or "Lean" in doc["name"]:
+            continue
+        if doc["kind"] == "theorem":
+            theorem_texts.append(doc["informal_description"])
+            theorem_metadata.append(
+                {
+                    "name": ".".join(doc["name"]),
+                    "kind": doc["kind"],
+                    "type": doc["type"],
+                    "informal_name": doc["informal_name"],
+                    "informal_description": doc["informal_description"],
+                }
+            )
+        else:
+            definition_texts.append(doc["informal_description"])
+            definition_metadata.append(
+                {
+                    "name": ".".join(doc["name"]),
+                    "kind": doc["kind"],
+                    "type": doc["type"],
+                    "informal_name": doc["informal_name"],
+                    "informal_description": doc["informal_description"],
+                }
+            )
 
     # Parse GPU IDs if specified
     gpu_ids = None
@@ -181,27 +210,49 @@ async def main():
         gpu_ids = [int(x.strip()) for x in args.gpu_ids.split(",")]
         print(f"Using specified GPU IDs: {gpu_ids}")
 
-    print(f"Generating embeddings for {len(texts)} documents...")
-    embeddings = get_embeddings(
-        texts,
+    print(
+        f"Generating embeddings for {len(theorem_texts)} theorems and {len(definition_texts)} definitions..."
+    )
+    theorem_embeddings = get_embeddings(
+        theorem_texts,
         batch_size=args.batch_size,
         use_multi_gpu=not args.no_multi_gpu,
         gpu_ids=gpu_ids,
         model_name=model_name,
     )
-
+    definition_embeddings = get_embeddings(
+        definition_texts,
+        batch_size=args.batch_size,
+        use_multi_gpu=not args.no_multi_gpu,
+        gpu_ids=gpu_ids,
+        model_name=model_name,
+    )
     print("Uploading vectors to Qdrant...")
-    points = []
-    for i, (embedding, payload) in enumerate(zip(embeddings, metadata)):
-        points.append(
+    theorem_points = []
+    definition_points = []
+    for i, (embedding, payload) in enumerate(zip(theorem_embeddings, theorem_metadata)):
+        theorem_points.append(
             models.PointStruct(id=i, vector=embedding.tolist(), payload=payload)
         )
-
+    for i, (embedding, payload) in enumerate(
+        zip(definition_embeddings, definition_metadata)
+    ):
+        definition_points.append(
+            models.PointStruct(id=i, vector=embedding.tolist(), payload=payload)
+        )
     # Upload in batches to avoid memory issues
     batch_size = 100
-    for i in tqdm.tqdm(range(0, len(points), batch_size), desc="Uploading batches"):
-        batch_points = points[i : i + batch_size]
-        client.upsert(collection_name="lean-search-server", points=batch_points)
+    for i in tqdm.tqdm(
+        range(0, len(theorem_points), batch_size), desc="Uploading theorem batches"
+    ):
+        batch_points = theorem_points[i : i + batch_size]
+        client.upsert(collection_name="theorem", points=batch_points)
+    for i in tqdm.tqdm(
+        range(0, len(definition_points), batch_size),
+        desc="Uploading definition batches",
+    ):
+        batch_points = definition_points[i : i + batch_size]
+        client.upsert(collection_name="definition", points=batch_points)
 
 
 if __name__ == "__main__":

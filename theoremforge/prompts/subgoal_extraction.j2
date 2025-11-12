@@ -1,0 +1,58 @@
+From this proof sketch, extract any missing proofs (specified with `sorry`) as 
+independent subgoals (theorems). 
+Instructions:
+1. Use the same name as the have statements for the theorems.
+2. Each subgoal should have the relevant context from the previous subgoals needed 
+   to simplify the proof as much as possible. 
+3. There should be as many extracted theorems as `sorry`s in the given theorem.
+4. Do NOT include any imports or open statements. Do NOT add any definitions. ONLY 
+   include the theorem statement.
+5. Use a separate Lean 4 ``lean`` block for each subgoal.
+6. Use sorry for the proof. Do NOT prove any theorem.
+7. Do NOT change the conclusion of the theorems from the extracted subgoals. Keep 
+   them AS IT IS.
+8. Do NOT change the conclusions of the preceding theorems when presenting them as 
+   hypotheses for the next subgoals. Keep them AS IT IS.
+9. Do NOT duplicate theorem names. Use distinct theorem names for the different theorems.
+10. Make sure the names and types of the premises/arguments in the extracted theorems 
+    MATCH the subgoals from which they are extracted.
+
+IMPORTANT INSTRUCTION: Do NOT, under ANY circumstances, allow division and 
+subtraction operations on natural number literals with UNDEFINED types, unless 
+REQUIRED by the theorem statement. For example, do NOT allow literals like `1 / 3` 
+or `2 / 5` or `1 - 3` ANYWHERE in the theorem statement. ALWAYS specify the types. 
+AVOID natural number arithmetic UNLESS NEEDED by the theorem statement.
+ALWAYS specify types when describing fractions. For example, ((2 : ℝ) / 3) or 
+((2 : ℚ) / 3) instead of (2 / 3)
+IMPORTANT INSTRUCTION: Do NOT, under ANY circumstances, allow division and 
+subtraction operations on variables of type natural numbers (Nat or ℕ), unless 
+REQUIRED by the theorem statement. For example, do NOT allow expressions like (a-b) 
+or (a/b) where a, b are of type ℕ. ALWAYS cast the variables to a suitable type 
+(ℤ, ℚ or ℝ) when performing arithmetic operations. AVOID natural number arithmetic 
+UNLESS NEEDED by the theorem statement.
+
+Hint:
+1. The subgoals should include the previous subgoals as hypotheses.
+
+Example:
+Input:
+```lean4
+theorem foo (a : ℕ) (h : Even a) : Even (a + 4) := by
+  have h1 : ∀ (x : ℕ), Even x → Even (x + 2) := by sorry
+  have h2 : Even (a + 2) := by sorry
+  have h3 : Even (a + 4) := by sorry
+  exact h3
+```
+
+Output:
+<subgoal>theorem foo_h1 : ∀ (x : ℕ), Even x → Even (x + 2) := by sorry</subgoal>
+<subgoal>theorem foo_h2 (a : ℕ) (h : Even a) : Even (a + 2) := by sorry</subgoal>
+<subgoal>theorem foo_h3 (a : ℕ) (h : Even a) : Even (a + 4) := by sorry</subgoal>
+
+Proof Sketch:
+```lean4
+{{ proof_sketch }}
+```
+
+Output Format:
+Each subgoal should be enclosed in <subgoal> tags without ```lean4```.

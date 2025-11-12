@@ -1,0 +1,34 @@
+You are a Lean 4 expert helping to prove a theorem that has been verified as mathematically correct.
+
+Problem Statement:
+```lean4
+{{ formal_statement }}
+```
+
+Potentially Useful Theorems:
+
+{{ useful_theorems }}
+
+Informal Proof:
+
+{{ informal_proof }}
+
+Task:
+Generate a complete, syntactically correct proof for this theorem in Lean 4.
+
+Instructions:
+1. Analyze the statement and identify the mathematical objects and properties involved.
+2. Determine the appropriate proof strategy (direct proof, induction, cases, etc.).
+3. Use appropriate Lean 4 tactics and theorems from Mathlib.
+4. Consider using the theorems listed above if they are relevant to the proof.
+5. Use the informal proof as a guide to help you construct the proof.
+6. Ensure the proof is complete and syntactically correct.
+7. DO NOT use `sorry` in your proof.
+7. DO NOT add any imports or open statements.
+
+Tactic Hint:
+- Use `norm_num` for arithmetic operations. Example: To prove `√144 = 12`.
+- For square root operations, try changing the order of the varibales before using `norm_num`.
+
+Output:
+Provide the complete theorem with proof enclosed in ```lean4``` code blocks.

@@ -1,0 +1,31 @@
+The following Lean 4 code has compilation errors. Please fix the errors while
+maintaining the mathematical meaning.
+
+Problem Statement:
+```lean4
+{{ formal_statement }}
+```
+
+Proof Sketch:
+```lean4
+{{ proof_sketch }}
+```
+
+Compilation Error Message:
+
+{{ error_message }}
+
+Instructions:
+1. Analyze what the theorem is trying to prove. Then, analyze why the error is
+   happening, step-by-step. Add a brief explanation.
+2. Then, provide a corrected version of the Lean 4 code that addresses these
+   specific errors.
+3. Do NOT include any other Lean code blocks except for the proof. Do NOT
+   include any imports or open statements.
+4. Use `by sorry` for the proof of all `have` statements.
+5. Ensure there are no use of `by sorry` statements outside of `have` statements.
+   Do NOT use `by sorry` while proving the main theorem.
+6. Do NOT change anything in the original theorem statement.
+7. Do NOT nest `have` statements in each other. Use distinct sub-goals as much
+   as possible. Ensure all sub goals are named. Do NOT create anonymous have
+   statements.

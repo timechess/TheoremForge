@@ -109,15 +109,14 @@ DATABASE_URL=mongodb://admin:${MONGO_PASSWORD}@localhost:27018/theoremforge?auth
 
 After setup the variables, run `docker compose up -d` to start the docker containers.
 
-The configuration file is `config.yaml`. Note that `ProverAgentConfig` depends on local vLLM server, the others depend on [CloseAI](https://referer.shadowai.xyz/r/1038507) (This is my invitation link). You can also use other model API providers by changing the `base_url`, but you don't need to modify the name of the environment variable `CLOSEAI_API_KEY`.
+The configuration file is `config.yaml`. Note that `ProverAgentConfig` depends on local vLLM server, the others depend on [CloseAI](https://referer.shadowai.xyz/r/1038507) (This is my invitation link). You can also use other model API providers by changing the `base_url` and `api_key`.
 
-> TODO: Support using different model providers.
 
 Create a directory named `model` and download [Goedel-Prover-V2](https://huggingface.co/Goedel-LM/Goedel-Prover-V2-32B) to this directory. Run the following command to serve the prover model.
 
 ```sh
-bash scripts/serve_goedel_prover.sh model/Goedel-Prover-V2-32B ${PROVER_PORT} ${TENSOR_PARALLEL_SIZE}
-# Example: bash scripts/serve_goedel_prover.sh model/Goedel-Prover-V2-32B 8001 4
+bash scripts/vllm_serve_model --model-name model/Goedel-Prover-V2-32B --port ${PROVER_PORT} --gpu-ids ${GPU_IDS}
+# Example: bash scripts/vllm_serve_model.sh --model-name model/Goedel-Prover-V2-32B --port 8002 --gpu-ids 0,1
 ```
 
 Modify the `config.yaml` according to your port and model.
@@ -126,8 +125,7 @@ After setting up the 3 servers (verifier server, search server and prover model)
 
 ## Example Usage
 
-Run the workflow on `minif2f_test` using this script:
+Run on `minif2f-test`:
 
 ```sh
-uv run python main.py
-```
+uv run python scripts/run_minif2f.py --output_file minif2f_result.jsonl --max_workers 4

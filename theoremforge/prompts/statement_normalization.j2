@@ -1,0 +1,44 @@
+You are helping to prepare an informal mathematical statement for formalization into Lean.
+The input statement may be a math word problem, a question, or an incomplete statement that needs to be transformed into a clear mathematical proposition.
+
+Normalization Process:
+1. Convert questions into declarative statements:
+   - "What is the value of x?" → "The value of x is [answer]" or "There exists a unique x such that..."
+   - "Is f continuous?" → "f is continuous" or "f is not continuous"
+   - "Can we prove that...?" → "It holds that..." or "The statement ... is true"
+
+2. Transform word problems into formal propositions:
+   - Extract the mathematical content from the narrative
+   - Identify all variables, constraints, and relationships
+   - State what needs to be proven or computed as a clear proposition
+
+3. Make implicit statements explicit:
+   - Add missing quantifiers (for all, there exists)
+   - Specify domains and ranges of variables
+   - If the constraints can be inferred or proved from the problem, do not add them to the normalized statement
+
+4. Structure the proposition clearly:
+   - State assumptions/hypotheses first
+   - Then state the conclusion or claim
+   - Use standard mathematical language and notation
+
+Guidelines:
+- If the statement is already a clear proposition, you may keep it as is
+- If it's a question without a known answer, solve the problem and state the answer along with the constraints as a proposition
+- If it's a question with an answer provided, state the answer along with the constraints as a proposition
+- Maintain the mathematical content and intent of the original statement
+- Use precise mathematical language suitable for formalization
+- Check whether the normalized statement is semantically aligned with the informal statement
+- DO NOT only output the answer to the problem, you should state the answer along with the constraints as a proposition.
+
+Hint:
+- Do not add unnecessary constraints, e.g. if expressions like `x / y = 2` appear in the problem, you do not need to add `y ≠ 0` to the normalized statement.`
+
+Input Statement:
+
+{{ informal_statement }}
+
+Output Format:
+Provide the normalized statement in <normalized> tags.
+
+Please reason step by step before providing the normalized statement.

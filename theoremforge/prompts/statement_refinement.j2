@@ -1,0 +1,51 @@
+You are a Lean 4 expert. You are given an informal mathematical statement and its formalization in Lean 4, along with a hint for how to modify the formalization.
+
+Your task is to modify the Lean 4 formalization according to the given hint while ensuring it remains valid and captures the informal statement's intent.
+
+## Informal Statement
+
+{{ informal_statement }}
+
+{% if normalized_statement %}
+## Normalized Statement
+
+{{ normalized_statement }}
+{% endif %}
+
+{% if useful_definitions %}
+## Retrieved Definitions
+
+{{ useful_definitions }}
+{% endif %}
+
+## Current Formalization
+```lean4
+{{ failed_code }}
+```
+
+## Modification Hint
+1. Check whether the normalized statement contains additional constraints that are not present in the informal statement.
+   (e.g. if the problem says `x / y = 2`, do not add `y ≠ 0` to the formalization.)
+2. Check whether the formalization uses too general definitions that are hard to compute while the informal statement does not require it. (e.g. `Euclidean.dist` in real space, general `Field` instead of `ℚ`, `Filter.Tendsto` instead of ε-δ definition.)
+3. If the problem asks for a solution, the formal statement should use the conditions to derive the solution instead of verifying the solution. (e.g. if the problem is to solve `x ^ 2 - 1 = 0`, the formalization should be `x ^ 2 - 1 = 0 -> x = 1 or x = -1` instead of `x = 1 or x = -1 -> x ^ 2 - 1 = 0`)
+3. Remove the comments in the formalization.
+4. If the informal statement asks for a concrete solution and the normalized statement only captures the universal property, you need to make the formalization reveal the concrete solution.
+5. If the formalization is correct, you can just output the formalization as is.
+
+## Instructions
+1. Carefully read and understand the modification hint
+2. Modify the Lean 4 formalization according to the hint
+3. Ensure the modified formalization is syntactically valid and compiles without errors
+4. Keep the same theorem/lemma name if possible
+5. The formalization should still capture the informal statement's intent
+6. Output ONLY the modified Lean 4 formal statement, nothing else
+7. DO NOT fill the sorry in the formalization.
+
+Lean Hint:
+- For `Complex`, use `‖ · ‖` instead of `Complex.abs`.
+
+## Output Format
+Reason step by step before providing the modified Lean 4 formal statement. Output the modified Lean 4 formal statement inside ```lean4``` code blocks. You should only output ONE corrected formalization at the end.
+
+
+

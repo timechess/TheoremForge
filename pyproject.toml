@@ -13,6 +13,7 @@ dependencies = [
     "motor>=3.3.2",
     "pyyaml>=6.0.3",
     "qdrant-client>=1.15.1",
+    "rich>=13.0.0",
     "sentence-transformers>=5.1.2",
     "streamlit>=1.50.0",
     "uvicorn>=0.38.0",

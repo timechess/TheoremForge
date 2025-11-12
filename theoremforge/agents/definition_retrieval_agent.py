@@ -1,15 +1,16 @@
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
+from theoremforge.retriever import Retriever
 import re
 from typing import List
-from theoremforge.utils import payload_to_string
-from theoremforge.prompt_manager import prompt_manager
 from loguru import logger
-from theoremforge.retriever import Retriever
+
+from theoremforge.prompt_manager import prompt_manager
+from theoremforge.utils import payload_to_string
 
 
-class TheoremRetrievalAgent(BaseAgent):
+class DefinitionRetrievalAgent(BaseAgent):
     def __init__(
         self,
         context: TheoremForgeContext,
@@ -20,7 +21,7 @@ class TheoremRetrievalAgent(BaseAgent):
         sampling_params: dict,
     ):
         super().__init__(
-            agent_name="theorem_retrieval_agent",
+            agent_name="definition_retrieval_agent",
             context=context,
         )
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
@@ -33,8 +34,8 @@ class TheoremRetrievalAgent(BaseAgent):
         matches = re.findall(pattern, text, re.DOTALL)
         return [match.strip() for match in matches][:5]
 
-    def _extract_theorems(self, text: str) -> List[str]:
-        pattern = r"<theorem>(.*?)</theorem>"
+    def _extract_definitions(self, text: str) -> List[str]:
+        pattern = r"<definition>(.*?)</definition>"
         matches = re.findall(pattern, text, re.DOTALL)
         return [match.strip() for match in matches]
 
@@ -43,7 +44,7 @@ class TheoremRetrievalAgent(BaseAgent):
             try:
                 state = await self.task_queue.get()
                 logger.info(
-                    f"Theorem Retrieval Agent: Start to process state {state.id}"
+                    f"Definition Retrieval Agent: Start to process state {state.id}"
                 )
 
                 # Check black_list with lock
@@ -52,13 +53,13 @@ class TheoremRetrievalAgent(BaseAgent):
 
                 if is_blacklisted:
                     logger.debug(
-                        f"Theorem Retrieval Agent: State {state.id} is blacklisted, routing to finish"
+                        f"Definition Retrieval Agent: State {state.id} is blacklisted, routing to finish"
                     )
                     await self.add_state_request("finish_agent", state)
                     continue
 
-                query_generation_prompt = prompt_manager.theorem_query_generation(
-                    state.formal_statement
+                query_generation_prompt = prompt_manager.definition_query_generation(
+                    state.normalized_statement
                 )
 
                 response = await self.client.chat.completions.create(
@@ -71,38 +72,39 @@ class TheoremRetrievalAgent(BaseAgent):
                 query_generation_output = response.choices[0].message.content
                 queries = self._extract_search_queries(query_generation_output)
                 logger.info(
-                    f"Theorem Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
+                    f"Definition Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
                 )
-                result = await self.retriever.search_theorems(queries, 5)
+                result = await self.retriever.search_definitions(queries, 5)
                 query_results = sum(result["results"], [])
-                theorems = "\n".join(
+                definitions = "\n".join(
                     [payload_to_string(result["payload"]) for result in query_results]
                 )
-                theorem_selection_prompt = prompt_manager.theorem_selection(
-                    state.formal_statement, theorems
+                definition_selection_prompt = prompt_manager.definition_selection(
+                    state.normalized_statement, definitions
                 )
                 response = await self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
-                        {"role": "user", "content": theorem_selection_prompt},
+                        {"role": "user", "content": definition_selection_prompt},
                     ],
                     **self.sampling_params,
                 )
-                theorem_selection_output = response.choices[0].message.content
-                theorem_names = self._extract_theorems(theorem_selection_output)
-                selected_theorems = [
-                    theorem["payload"]
-                    for theorem in query_results
-                    if theorem["payload"]["name"] in theorem_names
+                definition_selection_output = response.choices[0].message.content
+                definition_names = self._extract_definitions(
+                    definition_selection_output
+                )
+                selected_definitions = [
+                    definition["payload"]
+                    for definition in query_results
+                    if definition["payload"]["name"] in definition_names
                 ]
                 logger.info(
-                    f"Theorem Retrieval Agent: Selected {len(selected_theorems)} theorems for state {state.id}"
+                    f"Definition Retrieval Agent: Selected {len(selected_definitions)} definitions for state {state.id}"
                 )
-                theorem_selection_results = [
-                    payload_to_string(theorem) for theorem in selected_theorems
+                definition_selection_results = [
+                    payload_to_string(definition) for definition in selected_definitions
                 ]
-
-                await self.db.theoremretrievaltrace.create(
+                await self.db.definitionretrievaltrace.create(
                     data={
                         "queryGenerationPrompt": query_generation_prompt,
                         "queryGenerationOutput": query_generation_output,
@@ -110,23 +112,24 @@ class TheoremRetrievalAgent(BaseAgent):
                             payload_to_string(result["payload"])
                             for result in query_results
                         ],
-                        "theoremSelectionPrompt": theorem_selection_prompt,
-                        "theoremSelectionOutput": theorem_selection_output,
-                        "theoremSelectionResults": theorem_selection_results,
+                        "definitionSelectionPrompt": definition_selection_prompt,
+                        "definitionSelectionOutput": definition_selection_output,
+                        "definitionSelectionResults": definition_selection_results,
                         "stateId": state.id,
                     }
                 )
-                
-                state.metadata["useful_theorems"] = "\n".join(theorem_selection_results)
-                await self.add_state_request("informal_proof_agent", state)
+                state.metadata["useful_definitions"] = "\n".join(
+                    definition_selection_results
+                )
+                await self.add_state_request("autoformalization_agent", state)
             except Exception as e:
-                logger.error(f"Theorem Retrieval Agent: Error processing state: {e}")
+                logger.error(f"Definition Retrieval Agent: Error processing state: {e}")
                 import traceback
 
                 traceback.print_exc()
-                # Try to route to finish even on error
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
                 except Exception:
                     pass
+

@@ -38,7 +38,7 @@ def erase_header(code: str) -> str:
         import_pattern,
         "",
         re.sub(open_pattern, "", re.sub(set_option_pattern, "", code)),
-    )
+    ).strip("\n")
 
 
 def normalize_header(code: str) -> str:

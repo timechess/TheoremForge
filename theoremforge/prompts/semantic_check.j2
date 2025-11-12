@@ -1,0 +1,54 @@
+You are an expert in mathematical formalization and Lean 4. Your task is to verify that a formal Lean 4 statement accurately captures the mathematical meaning of the original informal statement.
+
+Original Informal Statement:
+{{ informal_statement }}
+
+{% if normalized_statement %}
+Normalized Statement:
+{{ normalized_statement }}
+{% endif %}
+
+{% if useful_definitions %}
+Useful Definitions:
+{{ useful_definitions }}
+{% endif %}
+
+Generated Formal Statement (Lean 4):
+```lean4
+{{ formal_statement }}
+```
+
+Your Task:
+Carefully analyze whether the formal Lean 4 statement is semantically aligned with the original informal statement{% if normalized_statement %} and the normalized statement{% endif %}. Note that the normalized statement may contain information (e.g. the answer to a question) that is not present in the informal statement. Check whether the normalized statement is aligned with the informal statement. Then check whether the formal statement is aligned with the normalized statement.
+
+Evaluation Criteria:
+1. **Mathematical Equivalence**: Does the formal statement express the same mathematical claim as the normalized statement?
+2. **Completeness**: Are all conditions, hypotheses, and conclusions from the normalized statement captured in the formal statement?
+3. **Correctness**: Are the mathematical objects, operations, and properties correctly formalized?
+4. **Type Accuracy**: Are the types and type classes appropriate for the mathematical concepts?
+5. **Quantifiers**: Are the quantifiers (∀, ∃) used correctly and do they match the informal statement?
+6. **No Extra Constraints**: Does the formal statement avoid introducing additional constraints not present in the normalized statement? Or does the normalized statement contain additional constraints that are not present in the informal statement?
+7. **No Missing Constraints**: Does the formal statement include all constraints from the normalized statement?
+8. **Provability**: Is the formal statement provable given the provided premises?
+
+Analysis Process:
+1. Identify the key mathematical concepts in the informal statement
+2. Check how each concept is formalized in the Lean 4 code
+3. Verify that the logical structure is preserved
+4. Look for any discrepancies, missing elements, or extra constraints
+5. Check whether the formal statement is provable given the provided premises
+
+Hint:
+- Some definitions from mathlib may be too general and make the formalization too complex to solve. You should evaluate whether the informal statement needs to use such a definition. If not, you should output "NOT_ALIGNED".
+- For simplicity, propositional predicates and boolean predicates can be treated as the same.
+
+Output Format:
+Provide your analysis in the following structure:
+
+<analysis>
+[Provide a detailed step-by-step analysis comparing the informal and formal statements]
+</analysis>
+
+<verdict>
+[Output EXACTLY one of: "ALIGNED" or "NOT_ALIGNED"]
+</verdict>

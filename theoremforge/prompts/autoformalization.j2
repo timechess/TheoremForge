@@ -1,0 +1,34 @@
+You are an expert in formalizing mathematical statements into Lean 4 using the mathlib library.
+
+Your task is to translate the following informal mathematical statement into formal Lean 4 code.
+
+Informal Statement:
+
+{{ informal_statement }}
+
+{% if retrieved_definitions %}
+Relevant Definitions and Structures from mathlib:
+
+{{ retrieved_definitions }}
+
+These definitions have been retrieved to help you formalize the statement. Use them when appropriate, but you are not required to use all of them if they are not relevant.
+{% endif %}
+
+Instructions:
+1. Analyze the informal statement and identify the mathematical objects, operations, and properties involved.
+2. Use appropriate mathlib definitions, type classes, and structures to represent the mathematical concepts.
+3. Follow mathlib conventions for naming, notation, and style.
+4. Write the formalization as a theorem, lemma, or definition as appropriate.
+5. Include necessary type annotations and hypotheses.
+6. Ensure the formalization is syntactically correct Lean 4 code.
+7. DO NOT add any imports or open statements.
+8. DO NOT fill the sorry in the formalization.
+
+Output Format:
+Provide your formalization inside ```lean4``` code blocks. Before the code, briefly explain your formalization approach and key design decisions.
+
+Hint:
+1. Check whether the normalized statement contains additional constraints that are not present in the informal statement.
+   (e.g. if the problem says `x / y = 2`, do not add `y ≠ 0` to the formalization.)
+2. Check whether the formalization uses too general definitions that are hard to compute while the informal statement does not require it. (e.g. `Euclidean.dist` in real space, general `Field` instead of `ℚ`, `Filter.Tendsto` instead of ε-δ definition.)
+3. If the problem asks for a solution, the formal statement should use the conditions to derive the solution instead of verifying the solution. (e.g. if the problem is to solve `x ^ 2 - 1 = 0`, the formalization should be `x ^ 2 - 1 = 0 -> x = 1 or x = -1` instead of `x = 1 or x = -1 -> x ^ 2 - 1 = 0`)

@@ -1,0 +1,40 @@
+You are an expert in Lean 4 theorem proving. Your task is to select the BEST formalization to prove from multiple semantically aligned formalizations of the same informal statement.
+
+**Informal Statement:**
+{{ informal_statement }}
+
+**Available Formalizations:**
+{% for idx, formalization in formalizations %}
+**Formalization {{ idx + 1 }}:**
+```lean4
+{{ formalization }}
+```
+{% endfor %}
+
+**Instructions:**
+1. Analyze each formalization carefully, considering:
+   - Structural complexity
+   - How many hypotheses need to be handled
+   - Whether the formalization uses complex type theory constructs
+   - Whether it requires proving stronger/more general results
+   - Availability of library theorems that might help
+   - How natural the proof approach would be
+   - Avoid using too general definitions that are hard to compute. (e.g. `Euclidean.dist` in real space or general `Field` instead of `ℚ`.)
+   - If the informal statement contains quantifiers, the formalization should also contain quantifiers.
+
+2. The BEST formalization should be EASY to prove while maintaining the mathematical meaning of the informal statement.
+
+3. Provide your analysis in the following format:
+   - Wrap your reasoning in <analysis></analysis> tags
+   - Specify the selected formalization number (1, 2, 3, etc.) in <selected>number</selected> tags
+
+Hint:
+- The formalization should be a theorem to prove instead of a definition of the answer.
+- Some mathlib APIs are hard to compute though semantically right, e.g. `Filter.tendsto`, which can be replaced by ε-δ definition.
+
+**Example Response Format:**
+<analysis>
+Your detailed reasoning about why you chose this formalization...
+</analysis>
+<selected>2</selected>
+

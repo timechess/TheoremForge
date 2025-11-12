@@ -1,17 +1,42 @@
-You are a Lean 4 expert who is trying to help write a proof in Lean 4.
+You are a Lean 4 expert assembling a complete proof from a proof sketch and proven subgoal theorems.
 
 Problem Statement:
+```lean4
 {{ formal_statement }}
+```
 
-Proof Sketch:
+Proof Sketch (with named `have` statements using `by sorry`):
+```lean4
 {{ proof_sketch }}
+```
 
-Subgoal Proofs:
+Proven Subgoal Theorems (these theorems have been proven and can be used):
+```lean4
 {{ subgoal_proofs }}
+```
+
+Task:
+Your goal is to replace each `sorry` in the proof sketch with a proof that uses the corresponding proven subgoal theorem.
+
+Important: The subgoal theorems listed above have already been proven. You should USE these theorems to fill in the sorries, NOT copy their proofs. Each subgoal theorem can be directly applied or referenced.
 
 Instructions:
+1. Identify each `have` statement with `sorry` in the proof sketch.
+2. Find the matching proven subgoal theorem (they should have the same or equivalent statement).
+3. Replace `sorry` with a proof that uses or applies the subgoal theorem (e.g., by exact, by apply, by using tactics that reference it).
+4. Preserve the overall structure and flow of the proof sketch.
+5. Ensure all intermediate steps are properly connected.
+6. The final proof should be syntactically correct and complete (no sorries remaining).
+7. DO NOT add any imports or open statements.
+8. Keep the original theorem statement unchanged.
 
-Use the proof sketch to write a complete proof in Lean 4 following these guidelines:
-- Use the subgoal proofs to complete the proof sketch.
-- Make sure to include all the subgoal proofs in the final proof.
-- DO NOT add any imports or open statements in the final proof.
+Example:
+Proof sketch: `have h1 : x + 0 = x := by sorry`
+Proven subgoal: `theorem subgoal_1 : ∀ x, x + 0 = x := by sorry`
+Result: Replace `sorry` with `exact subgoal_1 x` or use the proven fact directly
+
+The final proof should be enclosed in triple backticks ```lean4```.
+
+Note: 
+- The subgoal theorems should be exact matches to the `have` statements in the proof sketch. Do not write your own proofs.
+- DO NOT include the subgoal theorems in the final proof.

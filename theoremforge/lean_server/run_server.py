@@ -74,7 +74,7 @@ async def verify_code(request: VerificationRequest):
             code=request.code, allow_sorry=request.allow_sorry
         )
         error_messages = [msg for msg in messages if msg["severity"] == "error"]
-        error_str = get_error_str(HEADER + erase_header(request.code), error_messages)
+        error_str = get_error_str(erase_header(request.code), error_messages)
         return VerificationResponse(valid=valid, messages=messages, error_str=error_str)
     except Exception as e:
         logger.error(f"Error verifying code: {e}")

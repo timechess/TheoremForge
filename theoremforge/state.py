@@ -10,7 +10,8 @@ class TheoremForgeContext:
         self.verifier = RemoteVerifier(verifier_url)
         self.agents = dict()
         self.black_list = set()
-        self.record = dict()
+        self.statement_record = dict()
+        self.proof_record = dict()
         self.root_state_ids = set()  # Track root-level states (manually submitted)
         self.db = None  # Shared MongoDB client, initialized by manager
 
@@ -23,6 +24,7 @@ class TheoremForgeContext:
 class TheoremForgeState(BaseModel):
     id: str
     informal_statement: Optional[str] = None
+    normalized_statement: Optional[str] = None
     header: Optional[str] = "import Mathlib\n"
     formal_statement: Optional[str] = None
     formal_proof: Optional[str] = None

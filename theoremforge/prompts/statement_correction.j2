@@ -1,0 +1,42 @@
+You are a Lean 4 expert. You are given an informal mathematical statement and a failed Lean 4 formalization attempt along with the error message from the Lean compiler.
+
+Your task is to correct the Lean 4 formalization based on the error message while ensuring it captures the informal statement's intent.
+
+## Informal Statement
+
+{{ informal_statement }}
+
+{% if normalized_statement %}
+## Normalized Statement
+
+{{ normalized_statement }}
+{% endif %}
+
+{% if useful_definitions %}
+## Retrieved Definitions
+
+{{ useful_definitions }}
+{% endif %}
+
+## Failed Formalization
+```lean4
+{{ failed_code }}
+```
+
+## Error Message
+```
+{{ error_message }}
+```
+
+## Instructions
+1. Carefully analyze the error message to understand what went wrong
+2. Fix the Lean 4 formalization to address the error
+3. Ensure the corrected formalization is syntactically valid and compiles without errors
+4. Keep the same theorem/lemma name if possible
+5. The formalization should still capture the informal statement's intent
+6. Output ONLY the corrected Lean 4 formal statement, nothing else
+7. DO NOT fill the sorry in the formalization.
+
+## Output Format
+Reason step by step about the error and how to fix it. Output the corrected Lean 4 formal statement inside ```lean4``` code blocks. You should only output ONE corrected formalization at the end.
+

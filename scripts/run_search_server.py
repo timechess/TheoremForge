@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 import uvicorn
 from loguru import logger
 import argparse
@@ -20,7 +20,8 @@ model = SentenceTransformer("all-mpnet-base-v2", device="cpu")
 # Request/Response models
 class SearchRequest(BaseModel):
     queries: List[str]
-    topk: int = 10
+    topk: int = 5
+    collection_name: str
 
 
 class SearchResult(BaseModel):
@@ -49,13 +50,19 @@ async def search(request: SearchRequest):
         )
 
         all_results = []
-        # Search for each query
+        # Search for each query (only theorems)
         for query_embedding in query_embeddings:
             search_results = client.query_points(
-                collection_name="lean-search-server",
+                collection_name=request.collection_name,
                 query=query_embedding.tolist(),
                 limit=request.topk,
-                with_payload=["name", "type", "informal_name", "informal_description"],
+                with_payload=[
+                    "name",
+                    "kind",
+                    "type",
+                    "informal_name",
+                    "informal_description",
+                ],
             )
             # Format results
             formatted_results = [
@@ -73,7 +80,6 @@ async def search(request: SearchRequest):
         print(request)
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -82,7 +88,9 @@ async def health_check():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8002, help="Port to run the server on")
+    parser.add_argument(
+        "--port", type=int, default=8002, help="Port to run the server on"
+    )
     args = parser.parse_args()
     print("Starting Lean Search Server...")
     uvicorn.run(app, host="0.0.0.0", port=args.port)

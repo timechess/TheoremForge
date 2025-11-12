@@ -36,10 +36,15 @@ class InformalProofAgent(BaseAgent):
 
                 # Check black_list with lock
                 async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list
+                    is_blacklisted = (
+                        state.id in self.context.black_list
+                        or state.parent_id in self.context.black_list
+                    )
 
                 if is_blacklisted:
-                    logger.debug(f"Informal Proof Agent: State {state.id} is blacklisted")
+                    logger.debug(
+                        f"Informal Proof Agent: State {state.id} is blacklisted"
+                    )
                     await self.add_state_request("finish_agent", state)
                     continue
 
@@ -61,6 +66,16 @@ class InformalProofAgent(BaseAgent):
 
                 for i, informal_proof in enumerate(informal_proofs):
                     if not informal_proof:
+                        await self.db.informalprooftrace.create(
+                            data={
+                                "prompt": prompt,
+                                "output": response.choices[i].message.content,
+                                "formalStatement": state.formal_statement,
+                                "informalProof": None,
+                                "usefulTheorems": state.metadata["useful_theorems"],
+                                "stateId": state.id,
+                            }
+                        )
                         continue
                     await self.db.informalprooftrace.create(
                         data={
@@ -73,21 +88,25 @@ class InformalProofAgent(BaseAgent):
                         }
                     )
                     state.informal_proof = informal_proof
-                    logger.debug(f"Informal Proof Agent: Routing state {state.id} to proof_sketch_agent")
-                    await self.add_state_request("proof_sketch_agent", state)
+                    logger.debug(
+                        f"Informal Proof Agent: Routing state {state.id} to shallow_solve_agent"
+                    )
+                    await self.add_state_request("shallow_solve_agent", state)
                     break
                 if not any(informal_proofs):
+                    state.informal_proof = "No informal proof"
                     logger.info(
                         f"Informal Proof Agent: Failed to generate informal proof for state {state.id}"
                     )
-                    await self.add_state_request("finish_agent", state)
+                    await self.add_state_request("shallow_solve_agent", state)
 
             except Exception as e:
                 logger.error(f"Informal Proof Agent: Error processing state: {e}")
                 import traceback
+
                 traceback.print_exc()
                 try:
-                    if 'state' in locals():
+                    if "state" in locals():
                         await self.add_state_request("finish_agent", state)
                 except Exception:
                     pass

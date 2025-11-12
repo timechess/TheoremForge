@@ -31,7 +31,7 @@ class ProofSketchAgent(BaseAgent):
 
                 # Check black_list with lock
                 async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list
+                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
 
                 if is_blacklisted:
                     logger.debug(f"Proof Sketch Agent: State {state.id} is blacklisted, routing to finish")
@@ -95,15 +95,14 @@ class ProofSketchAgent(BaseAgent):
                         break
                     else:
                         logger.info(
-                            f"Proof Sketch Agent: Failed to generate proof sketch for state {state.id}"
+                            f"Proof Sketch Agent: Failed to generate proof sketch for state {state.id}, routing to sketch_correction"
                         )
                         state.metadata["failed_attempt"] = {
                             "code": proof_sketch,
                             "error_str": error_str,
-                            "type": "proof_sketch",
                         }
                         routed = True
-                        await self.add_state_request("self_correction_agent", state)
+                        await self.add_state_request("sketch_correction_agent", state)
                         break
 
                 # Save trace only if we processed at least one sketch
