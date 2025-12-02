@@ -16,5 +16,4 @@ data/
 *.ipynb
 persist/
 qdrant_data/
-competition*
 visualize*
