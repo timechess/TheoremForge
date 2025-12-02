@@ -4,7 +4,7 @@ from theoremforge.state import TheoremForgeContext
 from theoremforge.prompt_manager import prompt_manager
 
 from loguru import logger
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 import asyncio
 
 
@@ -29,16 +29,14 @@ class ProofAssemblyAgent(BaseAgent):
         while True:
             try:
                 state = await self.task_queue.get()
+                
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
-
-                if is_blacklisted:
-                    logger.debug(
-                        f"Proof Assembly Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Check if subgoals are ready in record
@@ -81,30 +79,51 @@ class ProofAssemblyAgent(BaseAgent):
                             state.proof_sketch,
                             "\n".join(subgoal_statements),
                         )
-                        response = await self.client.chat.completions.create(
-                            model=self.model_name,
-                            messages=[
-                                {"role": "user", "content": prompt},
-                            ],
-                            **self.sampling_params,
+                        response = await call_llm_interruptible(
+                            state,
+                            self.context,
+                            self.client,
+                            self.model_name,
+                            prompt,
+                            self.sampling_params,
+                            "proof_assembly_agent",
                         )
-                        content = response.choices[0].message.content
+                        content = response[0]
                         code = extract_lean_code(content)
                         if code:
+                            # Check for cancellation before verification
+                            if await self.is_cancelled(state):
+                                logger.info(
+                                    f"Proof Assembly Agent: State {state.id} cancelled before verification"
+                                )
+                                await self.add_state_request("finish_agent", state)
+                                await self.cleanup_cancellation_event(state)
+                                continue
+                            
                             (
                                 valid,
                                 messages,
                                 error_str,
-                            ) = await self.context.verifier.verify("\n".join(subgoal_proofs + [code]), False)
+                            ) = await self.context.verifier.verify(
+                                "\n".join(subgoal_proofs + [code]), False
+                            )
                             if valid:
                                 state.formal_proof = "\n".join(subgoal_proofs + [code])
                                 state.success = True
                                 await self.add_state_request("finish_agent", state)
+                                await self.cleanup_cancellation_event(state)
                             else:
                                 logger.info(
                                     f"Proof Assembly Agent: Assembly failed for state {state.id}, routing to finish_agent"
                                 )
-                                await self.add_state_request("finish_agent", state)
+                                state.metadata["failed_assembly"] = {
+                                    "code": code,
+                                    "error": error_str,
+                                }
+                                await self.add_state_request(
+                                    "assembly_correction_agent", state
+                                )
+                                await self.cleanup_cancellation_event(state)
 
                             await self.db.proofassemblytrace.create(
                                 data={
@@ -137,22 +156,30 @@ class ProofAssemblyAgent(BaseAgent):
                                 }
                             )
                             await self.add_state_request("finish_agent", state)
+                            await self.cleanup_cancellation_event(state)
 
                     else:
                         logger.info(
                             f"Proof Assembly Agent: Some subgoals failed for state {state.id}"
                         )
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 else:
                     await self.task_queue.put(state)
                     await asyncio.sleep(1)
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Proof Assembly Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Proof Assembly Agent: Error processing state: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass

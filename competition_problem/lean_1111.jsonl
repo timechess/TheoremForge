@@ -1,0 +1,10 @@
+{"id":"c463","nl_problem":"Compute the domain of the real-valued function \\[f(x)=\\sqrt{1-\\sqrt{2-\\sqrt{x}}}.\\]"}
+{"id":"c1880","nl_problem":"Prove that a set F is path-connected if and only if there exists an element x in F such that the path component of x in F is equal to F."}
+{"id":"c1720","nl_problem":"Prove that for a group M acting on a set α, the function \"fixingSubgroup\" is antitone. This function takes a subset of α and returns the subgroup of M that fixes all elements in that subset. Antitone means that if we have two subsets of α, say S and T, where S is a subset of T, then the fixing subgroup of T is a subgroup of the fixing subgroup of S."}
+{"id":"c1422","nl_problem":"Prove the Hockey Stick Identity: $\\sum_{i=0}^k \\binom{n+i}{n}=\\binom{n+k+1}{n+1}$"}
+{"id":"c614","nl_problem":"Which of the following could NOT be the lengths of the external diagonals of a right regular prism [a \"box\"]? (An $\\textit{external diagonal}$ is a diagonal of one of the rectangular faces of the box.)\n$\\text{(A) }\\{4,5,6\\} \\quad \\text{(B) } \\{4,5,7\\}  \\quad \\text{(C) } \\{4,6,7\\} \\quad \\text{(D) } \\{5,6,7\\} \\quad \\text{(E) } \\{5,7,8\\}$"}
+{"id":"c1715","nl_problem":"Let \\(f\\) and \\(f'\\) be functions and \\(s\\) be a set. If \\(f'\\) is a left inverse of \\(f\\) on the set \\(s\\), then prove that \\(f'\\) is a right inverse of \\(f\\) on the image of \\(s\\) under \\(f\\)."}
+{"id":"c1622","nl_problem":"Prove that the cosine function (cos) is continuous."}
+{"id":"c219","nl_problem":"A sequence of three real numbers forms an arithmetic progression with a first term of 9. If 2 is added to the second term and 20 is added to the third term, the three resulting numbers form a geometric progression. What is the smallest possible value for the third term of the geometric progression?"}
+{"id":"c1748","nl_problem":"Prove that the absolute value function, considered as a function from the rational numbers to the rational numbers, is uniformly continuous."}
+{"id":"c1657","nl_problem":"Prove that the norm of the negative of a bounded linear map between two normed vector spaces is equal to the norm of the original map."}

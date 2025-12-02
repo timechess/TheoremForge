@@ -1,5 +1,10 @@
 import re
+import asyncio
 from typing import Optional, List
+
+from openai import AsyncOpenAI
+from openai.types.chat.chat_completion import ChatCompletion
+from theoremforge.state import TheoremForgeState, TheoremForgeContext
 
 
 def extract_lean_code(text: str) -> str:
@@ -10,35 +15,37 @@ def extract_lean_code(text: str) -> str:
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         return matches[-1].strip()
-    
+
     # Fallback: try with ```lean tag
     pattern = r"```lean(?:\r?\n)(.*?)(?:\r?\n)?```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         return matches[-1].strip()
-    
+
     return None
 
-def remove_comments(text): # remove comments
+
+def remove_comments(text):  # remove comments
     # First remove all /- ... -/ blocks
-    text = re.sub(r'/-.*?-/', '', text, flags=re.DOTALL)
+    text = re.sub(r"/-.*?-/", "", text, flags=re.DOTALL)
     # text = re.sub(r'/- (?!special open -/).*?-/', '', text, flags=re.DOTALL)
     # text = re.sub(r'/-{1,2} (?!special open -/).*?-{1,2}/', '', text, flags=re.DOTALL)
     # Then remove -- comments from each line
-    lines = text.split('\n')
+    lines = text.split("\n")
     cleaned_lines = []
     for line in lines:
         # Split on -- and keep only the first part
-        cleaned_line = line.split('--', 1)[0]
+        cleaned_line = line.split("--", 1)[0]
         if "--" in line:
             cleaned_lines.append(cleaned_line.rstrip())
         else:
             cleaned_lines.append(cleaned_line)
     # Join back together and remove excessive empty lines
-    cleaned_text = '\n'.join(cleaned_lines)
+    cleaned_text = "\n".join(cleaned_lines)
     # Remove multiple consecutive empty lines
     # cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
     return cleaned_text.strip()
+
 
 def payload_to_string(payload: dict) -> str:
     return f"""full_name: {payload["name"]}
@@ -128,3 +135,118 @@ def get_error_str(
         err_str += f"\n... [Omitted {len(errors) - error_num_thres} more errors] ...\n"
 
     return err_str
+
+
+class CancellationError(Exception):
+    """Raised when an operation is cancelled via cancellation event."""
+    pass
+
+
+async def call_llm(
+    state: TheoremForgeState,
+    client: AsyncOpenAI,
+    model_name: str,
+    prompt: str | List[dict],
+    sampling_params: dict,
+    agent_name: str,
+) -> List[str]:
+    if isinstance(prompt, str):
+        prompt = [{"role": "user", "content": prompt}]
+    response: ChatCompletion = await client.chat.completions.create(
+        model=model_name,
+        messages=prompt,
+        **sampling_params,
+    )
+
+    if agent_name in state.token_trace:
+        state.token_trace[agent_name] = {
+            "prompt_tokens": response.usage.prompt_tokens
+            + state.token_trace[agent_name]["prompt_tokens"],
+            "completion_tokens": response.usage.completion_tokens
+            + state.token_trace[agent_name]["completion_tokens"],
+            "total_tokens": response.usage.total_tokens
+            + state.token_trace[agent_name]["total_tokens"],
+        }
+    else:
+        state.token_trace[agent_name] = {
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+    return [choice.message.content for choice in response.choices]
+
+
+async def call_llm_interruptible(
+    state: TheoremForgeState,
+    context: TheoremForgeContext,
+    client: AsyncOpenAI,
+    model_name: str,
+    prompt: str | List[dict],
+    sampling_params: dict,
+    agent_name: str,
+) -> List[str]:
+    """
+    Call LLM with support for cancellation via context.cancellation_events.
+    
+    Args:
+        state: The state being processed
+        context: TheoremForgeContext with cancellation events
+        client: OpenAI client
+        model_name: Model to use
+        prompt: Prompt or message list
+        sampling_params: Sampling parameters
+        agent_name: Name of the calling agent
+        
+    Returns:
+        List of generated responses
+        
+    Raises:
+        CancellationError: If the state is cancelled during execution
+    """
+    # Check if already cancelled before starting
+    async with context.cancellation_lock:
+        cancellation_event = context.cancellation_events.get(state.id)
+        if cancellation_event and cancellation_event.is_set():
+            raise CancellationError(f"State {state.id} was cancelled before LLM call")
+    
+    # Create the LLM call task
+    llm_task = asyncio.create_task(
+        call_llm(state, client, model_name, prompt, sampling_params, agent_name)
+    )
+    
+    # If there's a cancellation event, wait for either completion or cancellation
+    async with context.cancellation_lock:
+        cancellation_event = context.cancellation_events.get(state.id)
+    
+    if cancellation_event:
+        # Create cancellation wait task
+        cancel_wait_task = asyncio.create_task(cancellation_event.wait())
+        
+        # Wait for either the LLM call or cancellation
+        done, pending = await asyncio.wait(
+            [llm_task, cancel_wait_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Cancel all pending tasks to avoid "task destroyed but pending" warnings
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        
+        # If cancellation happened first, raise cancellation error
+        if cancellation_event.is_set():
+            raise CancellationError(f"State {state.id} was cancelled during LLM call")
+        
+        # Otherwise, return the LLM result (from done tasks)
+        for task in done:
+            if task == llm_task:
+                return task.result()
+        
+        # Fallback - should not reach here
+        return await llm_task
+    else:
+        # No cancellation event registered, just wait normally
+        return await llm_task

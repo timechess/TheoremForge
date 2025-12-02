@@ -5,7 +5,7 @@ from openai import AsyncOpenAI
 import re
 import asyncio
 from theoremforge.prompt_manager import prompt_manager
-
+from theoremforge.utils import call_llm_interruptible, CancellationError
 
 class SemanticCheckAgent(BaseAgent):
     def __init__(
@@ -31,67 +31,19 @@ class SemanticCheckAgent(BaseAgent):
         match = re.search(pattern, response, re.DOTALL)
         return match.group(1).strip() if match else None
 
-    async def _check_single_formalization(
-        self, state_id: str, informal_statement: str, formal_statement: str, 
-        normalized_statement: str, useful_definitions: str
-    ) -> tuple[str, str, str, str, str]:
-        """
-        Check a single formalization for semantic alignment.
-        
-        Returns:
-            Tuple of (formal_statement, prompt, output, analysis, conclusion)
-        """
-        try:
-            semantic_check_prompt = prompt_manager.semantic_check(
-                informal_statement=informal_statement,
-                formal_statement=formal_statement,
-                normalized_statement=normalized_statement,
-                useful_definitions=useful_definitions,
-            )
-            
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": semantic_check_prompt}],
-                **self.sampling_params,
-            )
-            
-            semantic_check_output = response.choices[0].message.content
-            semantic_check_analysis = self._extract_semantic_check_analysis(
-                semantic_check_output
-            )
-            semantic_check_conclusion = self._extract_semantic_check_conclusion(
-                semantic_check_output
-            )
-            
-            return (
-                formal_statement, 
-                semantic_check_prompt, 
-                semantic_check_output, 
-                semantic_check_analysis, 
-                semantic_check_conclusion
-            )
-            
-        except Exception as e:
-            logger.error(
-                f"Semantic Check Agent: Error checking formalization for state {state_id}: {e}"
-            )
-            return (formal_statement, "", "", None, None)
-
     async def run(self):
         while True:
             try:
                 state = await self.task_queue.get()
                 logger.info(f"Semantic Check Agent: Start to process state {state.id}")
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Semantic Check Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 if not state.informal_statement:
@@ -99,6 +51,7 @@ class SemanticCheckAgent(BaseAgent):
                         f"Semantic Check Agent: Missing informal statement for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Get valid formalizations from metadata (from autoformalization or statement correction)
@@ -114,6 +67,7 @@ class SemanticCheckAgent(BaseAgent):
                         f"Semantic Check Agent: No valid formalizations to check for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 logger.info(
@@ -123,32 +77,37 @@ class SemanticCheckAgent(BaseAgent):
                 # Check all valid formalizations for semantic alignment concurrently
                 normalized_statement = state.normalized_statement or ""
                 useful_definitions = state.metadata.get("useful_definitions", "") or ""
-                
+
                 # Create tasks for concurrent processing
-                check_tasks = [
-                    self._check_single_formalization(
-                        state.id,
-                        state.informal_statement,
-                        formal_statement,
-                        normalized_statement,
-                        useful_definitions
+                check_prompts = [
+                    prompt_manager.semantic_check(
+                        informal_statement=state.informal_statement,
+                        formal_statement=formal_statement,
+                        normalized_statement=normalized_statement,
+                        useful_definitions=useful_definitions,
                     )
                     for formal_statement in valid_formalizations
                 ]
-                
-                # Run all checks concurrently
-                check_results = await asyncio.gather(*check_tasks)
-                
+                check_tasks = [
+                    call_llm_interruptible(
+                        state,
+                        self.context,
+                        self.client,
+                        self.model_name,
+                        prompt,
+                        self.sampling_params,
+                        "semantic_check_agent",
+                    )
+                    for prompt in check_prompts
+                ]
+                responses = await asyncio.gather(*check_tasks)
+
                 # Process results and save to database
                 aligned_formalizations = []
-                for (
-                    formal_statement, 
-                    semantic_check_prompt, 
-                    semantic_check_output, 
-                    semantic_check_analysis, 
-                    semantic_check_conclusion
-                ) in check_results:
-                    
+                for i, response in enumerate(responses):
+                    semantic_check_output = response[0]
+                    semantic_check_analysis = self._extract_semantic_check_analysis(semantic_check_output)
+                    semantic_check_conclusion = self._extract_semantic_check_conclusion(semantic_check_output)
                     if not semantic_check_analysis or not semantic_check_conclusion:
                         logger.warning(
                             f"Semantic Check Agent: Failed to extract analysis or conclusion for one formalization of state {state.id}"
@@ -158,7 +117,7 @@ class SemanticCheckAgent(BaseAgent):
                     # Save to database
                     await self.db.semanticchecktrace.create(
                         data={
-                            "prompt": semantic_check_prompt,
+                            "prompt": check_prompts[i],
                             "output": semantic_check_output,
                             "analysis": semantic_check_analysis,
                             "conclusion": semantic_check_conclusion,
@@ -170,7 +129,7 @@ class SemanticCheckAgent(BaseAgent):
                         logger.info(
                             f"Semantic Check Agent: Found semantically aligned formalization for state {state.id}"
                         )
-                        aligned_formalizations.append(formal_statement)
+                        aligned_formalizations.append(valid_formalizations[i])
 
                 if aligned_formalizations:
                     logger.info(
@@ -184,14 +143,23 @@ class SemanticCheckAgent(BaseAgent):
                         f"Semantic Check Agent: No semantically aligned formalization found for state {state.id}, routing to finish_agent"
                     )
                     await self.add_state_request("finish_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Semantic Check Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Error in Semantic Check Agent: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass

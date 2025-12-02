@@ -2,7 +2,7 @@ from loguru import logger
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 from theoremforge.prompt_manager import prompt_manager
 
 
@@ -31,13 +31,13 @@ class ShallowSolveAgent(BaseAgent):
                 state = await self.task_queue.get()
                 logger.info(f"Shallow Solve Agent: Start to process state {state.id}")
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(f"Shallow Solve Agent: State {state.id} is blacklisted")
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 if not state.formal_statement:
@@ -56,7 +56,7 @@ class ShallowSolveAgent(BaseAgent):
                     logger.info(
                         f"Shallow Solve Agent: Max rounds ({self.max_rounds}) reached for state {state.id}"
                     )
-                    await self.add_state_request("prover_agent", state)
+                    await self.add_state_request("proof_sketch_agent", state)
                     continue
 
                 # Build messages for chat history
@@ -88,14 +88,18 @@ class ShallowSolveAgent(BaseAgent):
                     messages.append({"role": "user", "content": refinement_prompt})
                     logger.info(f"Shallow Solve Agent: Round {current_round} (refinement) for state {state.id}")
 
-                # Call LLM with chat history
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    **self.sampling_params,
+                # Call LLM with chat history (interruptible)
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    messages,
+                    self.sampling_params,
+                    "shallow_solve_agent",
                 )
 
-                output = response.choices[0].message.content
+                output = response[0]
                 code = extract_lean_code(output)
 
                 if not code:
@@ -113,6 +117,15 @@ class ShallowSolveAgent(BaseAgent):
                     })
                     # Try again in next round
                     await self.task_queue.put(state)
+                    continue
+
+                # Check for cancellation before verification
+                if await self.is_cancelled(state):
+                    logger.info(
+                        f"Shallow Solve Agent: State {state.id} cancelled before verification"
+                    )
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Verify the proof
@@ -152,13 +165,20 @@ class ShallowSolveAgent(BaseAgent):
                     state.formal_proof = code
                     state.success = True
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                 else:
                     logger.info(
                         f"Shallow Solve Agent: Round {current_round} failed for state {state.id}, will retry"
                     )
-                    # Put back in queue for next round
+                    # Put back in queue for next round (keep cancellation event registered)
                     await self.task_queue.put(state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Shallow Solve Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Shallow Solve Agent: Error processing state: {e}")
                 import traceback

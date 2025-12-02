@@ -3,6 +3,7 @@ from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
 from loguru import logger
 from theoremforge.prompt_manager import prompt_manager
+from theoremforge.utils import call_llm_interruptible, CancellationError
 import re
 
 
@@ -33,15 +34,13 @@ class StatementNormalizationAgent(BaseAgent):
                     f"Statement Normalization Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Statement Normalization Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 if not state.informal_statement:
@@ -49,19 +48,22 @@ class StatementNormalizationAgent(BaseAgent):
                         f"Statement Normalization Agent: No informal statement for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 statement_normalization_prompt = prompt_manager.statement_normalization(
                     state.informal_statement
                 )
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": statement_normalization_prompt}
-                    ],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    statement_normalization_prompt,
+                    self.sampling_params,
+                    "statement_normalization_agent",
                 )
-                statement_normalization_output = response.choices[0].message.content
+                statement_normalization_output = response[0]
                 normalized_statement = self._extract_statement_normalization(
                     statement_normalization_output
                 )
@@ -70,6 +72,7 @@ class StatementNormalizationAgent(BaseAgent):
                         f"Statement Normalization Agent: Failed to normalize statement {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
                 logger.info(
                     f"Statement Normalization Agent: Normalized statement {state.id}"
@@ -85,7 +88,16 @@ class StatementNormalizationAgent(BaseAgent):
                 )
                 logger.debug(f"Statement Normalization Agent: Routing state {state.id} to definition_retrieval_agent")
                 await self.add_state_request("definition_retrieval_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Statement Normalization Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Error in StatementNormalizationAgent: {e}")
                 import traceback
@@ -93,5 +105,6 @@ class StatementNormalizationAgent(BaseAgent):
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass

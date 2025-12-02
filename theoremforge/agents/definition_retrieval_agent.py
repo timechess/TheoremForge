@@ -7,7 +7,7 @@ from typing import List
 from loguru import logger
 
 from theoremforge.prompt_manager import prompt_manager
-from theoremforge.utils import payload_to_string
+from theoremforge.utils import call_llm_interruptible, CancellationError, payload_to_string
 
 
 class DefinitionRetrievalAgent(BaseAgent):
@@ -47,33 +47,44 @@ class DefinitionRetrievalAgent(BaseAgent):
                     f"Definition Retrieval Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Definition Retrieval Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 query_generation_prompt = prompt_manager.definition_query_generation(
                     state.normalized_statement
                 )
 
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": query_generation_prompt},
-                    ],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    query_generation_prompt,
+                    self.sampling_params,
+                    "definition_retrieval_agent",
                 )
-                query_generation_output = response.choices[0].message.content
+
+                query_generation_output = response[0]
                 queries = self._extract_search_queries(query_generation_output)
                 logger.info(
                     f"Definition Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
                 )
+                
+                # Check for cancellation before expensive retrieval operation
+                if await self.is_cancelled(state):
+                    logger.info(
+                        f"Definition Retrieval Agent: State {state.id} cancelled before retrieval"
+                    )
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
+                    continue
+                
                 result = await self.retriever.search_definitions(queries, 5)
                 query_results = sum(result["results"], [])
                 definitions = "\n".join(
@@ -82,14 +93,16 @@ class DefinitionRetrievalAgent(BaseAgent):
                 definition_selection_prompt = prompt_manager.definition_selection(
                     state.normalized_statement, definitions
                 )
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": definition_selection_prompt},
-                    ],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    definition_selection_prompt,
+                    self.sampling_params,
+                    "definition_retrieval_agent",
                 )
-                definition_selection_output = response.choices[0].message.content
+                definition_selection_output = response[0]
                 definition_names = self._extract_definitions(
                     definition_selection_output
                 )
@@ -122,14 +135,23 @@ class DefinitionRetrievalAgent(BaseAgent):
                     definition_selection_results
                 )
                 await self.add_state_request("autoformalization_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Definition Retrieval Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Definition Retrieval Agent: Error processing state: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass
 

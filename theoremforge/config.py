@@ -151,6 +151,11 @@ class Config:
         """Get Proof Assembly Agent configuration"""
         return self._config.get("ProofAssemblyAgentConfig", {})
 
+    @property
+    def assembly_correction_agent(self):
+        """Get Assembly Correction Agent configuration"""
+        return self._config.get("AssemblyCorrectionAgentConfig", {})
+
 
 # Global config instance
 config = Config()

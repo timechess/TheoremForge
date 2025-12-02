@@ -2,7 +2,11 @@ from loguru import logger
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import (
+    extract_lean_code,
+    call_llm_interruptible,
+    CancellationError,
+)
 from theoremforge.prompt_manager import prompt_manager
 
 
@@ -27,19 +31,25 @@ class SketchCorrectionAgent(BaseAgent):
         while True:
             try:
                 state = await self.task_queue.get()
-                logger.info(f"Sketch Correction Agent: Start to process state {state.id}")
+                logger.info(f"Sketch Correction Agent: Processing state {state.id}")
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
 
-                if is_blacklisted:
-                    logger.debug(f"Sketch Correction Agent: State {state.id} is blacklisted")
+                await self.register_cancellation_event(state)
+
+                # Check if state should be skipped (blacklisted or cancelled)
+
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+
+                    await self.cleanup_cancellation_event(state)
+
                     continue
 
                 if "failed_attempt" not in state.metadata:
-                    logger.error(f"Sketch Correction Agent: No failed attempt found for state {state.id}")
+                    logger.error(
+                        f"Sketch Correction Agent: No failed attempt found for state {state.id}"
+                    )
                     await self.add_state_request("finish_agent", state)
                     continue
 
@@ -49,14 +59,16 @@ class SketchCorrectionAgent(BaseAgent):
                     state.metadata["failed_attempt"]["error_str"],
                 )
 
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "sketch_correction_agent",
                 )
-                codes = [
-                    extract_lean_code(choice.message.content) for choice in response.choices
-                ]
+                codes = [extract_lean_code(code) for code in response]
                 valid_flag = False
 
                 for i, code in enumerate(codes):
@@ -80,7 +92,7 @@ class SketchCorrectionAgent(BaseAgent):
                     await self.db.sketchcorrectiontrace.create(
                         data={
                             "prompt": prompt,
-                            "output": response.choices[i].message.content,
+                            "output": response[i],
                             "outputCode": code,
                             "valid": valid,
                             "errorMessage": error_str,
@@ -94,14 +106,23 @@ class SketchCorrectionAgent(BaseAgent):
                     )
                     await self.add_state_request("finish_agent", state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+
+                logger.info(f"Sketch Correction Agent: {e}")
+
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+
+                    await self.cleanup_cancellation_event(state)
+
             except Exception as e:
                 logger.error(f"Sketch Correction Agent: Error processing state: {e}")
                 import traceback
+
                 traceback.print_exc()
                 try:
-                    if 'state' in locals():
+                    if "state" in locals():
                         await self.add_state_request("finish_agent", state)
                 except Exception:
                     pass
-
-

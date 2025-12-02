@@ -3,7 +3,7 @@ from loguru import logger
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 from theoremforge.prompt_manager import prompt_manager
 
 
@@ -32,15 +32,13 @@ class ProofCorrectionAgent(BaseAgent):
                     f"Proof Correction Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Proof Correction Agent: State {state.id} is blacklisted"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Support both old format (single failed_attempt) and new format (multiple failed_attempts)
@@ -73,17 +71,20 @@ class ProofCorrectionAgent(BaseAgent):
                     for failed_attempt in failed_attempts
                 ]
 
-                # Send all LLM requests in parallel
+                # Send all LLM requests in parallel with cancellation support
                 logger.debug(
                     f"Proof Correction Agent: Sending {len(prompts)} correction requests in parallel for state {state.id}"
                 )
                 responses = await asyncio.gather(
                     *[
-                        self.client.chat.completions.create(
-                            model=self.model_name,
-                            messages=prev_attempt
-                            + [{"role": "user", "content": prompt}],
-                            **self.sampling_params,
+                        call_llm_interruptible(
+                            state,
+                            self.context,
+                            self.client,
+                            self.model_name,
+                            prev_attempt + [{"role": "user", "content": prompt}],
+                            self.sampling_params,
+                            "proof_correction_agent",
                         )
                         for prev_attempt, prompt in zip(prev_attempts, prompts)
                     ]
@@ -98,18 +99,29 @@ class ProofCorrectionAgent(BaseAgent):
                         break
 
                     codes = [
-                        extract_lean_code(choice.message.content)
-                        for choice in response.choices
+                        extract_lean_code(code)
+                        for code in response
                     ]
 
                     for i, code in enumerate(codes):
                         if valid_flag:
                             break
+
+                        # Check for cancellation during verification loop
+                        if await self.is_cancelled(state):
+                            logger.info(
+                                f"Proof Correction Agent: State {state.id} cancelled during verification"
+                            )
+                            await self.add_state_request("finish_agent", state)
+                            await self.cleanup_cancellation_event(state)
+                            valid_flag = True  # Break outer loop
+                            break
+
                         if not code:
                             await self.db.proofcorrectiontrace.create(
                                 data={
                                     "prompt": prompt,
-                                    "output": response.choices[i].message.content,
+                                    "output": response[i],
                                     "outputCode": None,
                                     "valid": False,
                                     "errorMessage": "Failed to extract Lean code",
@@ -135,7 +147,7 @@ class ProofCorrectionAgent(BaseAgent):
                         await self.db.proofcorrectiontrace.create(
                             data={
                                 "prompt": prompt,
-                                "output": response.choices[i].message.content,
+                                "output": response[i],
                                 "outputCode": code,
                                 "valid": valid,
                                 "errorMessage": error_str,
@@ -153,10 +165,19 @@ class ProofCorrectionAgent(BaseAgent):
                         await self.add_state_request("finish_agent", state)
                     else:
                         logger.info(
-                            f"Proof Correction Agent: Failed to correct formal proof for state {state.id}, routing to proof_sketch_agent"
+                            f"Proof Correction Agent: Failed to correct formal proof for state {state.id}, routing to shallow_solve_agent"
                         )
-                        await self.add_state_request("proof_sketch_agent", state)
+                        await self.add_state_request("shallow_solve_agent", state)
 
+                # Cleanup cancellation event
+                await self.cleanup_cancellation_event(state)
+
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Proof Correction Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Proof Correction Agent: Error processing state: {e}")
                 import traceback

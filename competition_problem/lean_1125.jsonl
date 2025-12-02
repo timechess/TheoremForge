@@ -1,0 +1,10 @@
+{"id":"c610","nl_problem":"Real numbers $x$ and $y$ satisfy the equation $x^2 + y^2 = 10x - 6y - 34$. What is $x+y$?"}
+{"id":"c300","nl_problem":"If $x$, $y$, and $z$ are positive numbers satisfying \\[\nx+\\frac{1}{y}=4,\\ \\ \\ y+\\frac{1}{z}=1,\\text{ and }z+\\frac{1}{x}=\\frac{7}{3},\n\\]find the value of $xyz$."}
+{"id":"c13","nl_problem":"One line is described by\n\\[\\begin{pmatrix} -1 \\\\ -3 \\\\ -5 \\end{pmatrix} + t \\begin{pmatrix} 3 \\\\ k \\\\ 7 \\end{pmatrix}.\\]Another line is described by\n\\[\\begin{pmatrix} 2 \\\\ 4 \\\\ 6 \\end{pmatrix} + u \\begin{pmatrix} 1 \\\\ 4 \\\\ 7 \\end{pmatrix}.\\]Find $k$ so that the lines are coplanar (i.e. there is a plane that contains both lines)."}
+{"id":"c4378","nl_problem":"在24小时里面时针、分针、秒针三个同时可以重合几次？"}
+{"id":"c4146","nl_problem":"Suppose $a(x)$ and $b(x)$ have degree $<n$. If $a(c)=b(c)$ for $n$ values of $c$, prove that $a(x)=b(x)$."}
+{"id":"c185","nl_problem":"The positive integers $A,$ $B,$ $A-B,$ and $A+B$ are all prime numbers. The sum of these four primes is\n\n$\\bullet$ A. even\n\n$\\bullet$ B. divisible by $3$\n\n$\\bullet$ C. divisible by $5$\n\n$\\bullet$ D. divisible by $7$\n\n$\\bullet$ E. prime\n\nExpress your answer using a letter, as A, B, C, D, or E."}
+{"id":"c340","nl_problem":"Given that $\\binom{17}{10}=19448$, $\\binom{17}{11}=12376$ and $\\binom{19}{12}=50388$, find $\\binom{18}{12}$."}
+{"id":"c531","nl_problem":"Let $a,$ $b,$ $c,$ $d$ be positive real numbers.  Find the minimum value of\n\\[(a + b + c + d) \\left( \\frac{1}{a} + \\frac{1}{b} + \\frac{1}{c} + \\frac{1}{d} \\right).\\]"}
+{"id":"c477","nl_problem":"What is the residue modulo $13$ of the sum of the modulo $13$ inverses of the first $12$ positive integers?\n\nExpress your answer as an integer from $0$ to $12$, inclusive."}
+{"id":"c4377","nl_problem":"假设有一群学生排成一排，然后开始发书。李老师从左面第一个学生开始，每隔1人发一本数学书；从右面第一个学生开始，每隔3人发一本语文书。如果分发后的结果有5个学生既得到了数学书，又得到了语文书，那么这个班级最多有多少个学生？"}

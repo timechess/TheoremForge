@@ -15,10 +15,17 @@ class TheoremForgeContext:
         self.root_state_ids = set()  # Track root-level states (manually submitted)
         self.db = None  # Shared MongoDB client, initialized by manager
 
+        # Shared task queues per agent type (for work-stealing optimization)
+        self.shared_queues = dict()  # agent_name -> asyncio.Queue[TheoremForgeState]
+
+        # Cancellation events for interrupting ongoing work
+        self.cancellation_events = dict()  # state_id -> asyncio.Event
+
         # Locks for thread-safe concurrent access
         self.black_list_lock = asyncio.Lock()
         self.record_lock = asyncio.Lock()
         self.root_state_ids_lock = asyncio.Lock()
+        self.cancellation_lock = asyncio.Lock()
 
 
 class TheoremForgeState(BaseModel):
@@ -35,4 +42,5 @@ class TheoremForgeState(BaseModel):
     parent_id: Optional[str] = None
     siblings: Optional[List[str]] = None
     success: bool = False
+    token_trace: Optional[dict] = {}
     metadata: Optional[dict] = {}

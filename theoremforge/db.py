@@ -228,6 +228,14 @@ class MongoDBClient:
             self._collections["subgoalextractiontrace"] = SubgoalExtractionTraceCollection(self.db)
         return self._collections["subgoalextractiontrace"]
 
+    @property
+    def assemblycorrectiontrace(self):
+        """Access AssemblyCorrectionTrace collection."""
+        if "assemblycorrectiontrace" not in self._collections:
+            self._collections["assemblycorrectiontrace"] = AssemblyCorrectionTraceCollection(self.db)
+        return self._collections["assemblycorrectiontrace"]
+
+
 class BaseCollection:
     """Base class for MongoDB collections."""
 
@@ -410,3 +418,9 @@ class SubgoalExtractionTraceCollection(BaseCollection):
 
     def __init__(self, db: AsyncIOMotorDatabase):
         super().__init__(db, "subgoal_extraction_traces")
+
+class AssemblyCorrectionTraceCollection(BaseCollection):
+    """Collection for assembly correction traces."""
+
+    def __init__(self, db: AsyncIOMotorDatabase):
+        super().__init__(db, "assembly_correction_traces")

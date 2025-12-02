@@ -3,7 +3,7 @@ from theoremforge.state import TheoremForgeContext
 from loguru import logger
 from openai import AsyncOpenAI
 from theoremforge.prompt_manager import prompt_manager
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 
 
 class StatementRefinementAgent(BaseAgent):
@@ -28,15 +28,13 @@ class StatementRefinementAgent(BaseAgent):
                     f"Statement Refinement Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Statement Refinement Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 if not state.informal_statement:
@@ -44,6 +42,7 @@ class StatementRefinementAgent(BaseAgent):
                         f"Statement Refinement Agent: Missing informal statement for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Get the selected formalization from the previous agent
@@ -53,6 +52,7 @@ class StatementRefinementAgent(BaseAgent):
                         f"Statement Refinement Agent: No formal statement to refine for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 logger.info(
@@ -71,17 +71,21 @@ class StatementRefinementAgent(BaseAgent):
                 logger.debug(
                     f"Statement Refinement Agent: Sending refinement request for state {state.id}"
                 )
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "statement_refinement_agent",
                 )
 
                 # Process response and verify codes
                 final_formalization = None
                 refined_codes = [
-                    extract_lean_code(choice.message.content)
-                    for choice in response.choices
+                    extract_lean_code(code)
+                    for code in response
                 ]
 
                 for i, code in enumerate(refined_codes):
@@ -89,7 +93,7 @@ class StatementRefinementAgent(BaseAgent):
                         await self.db.statementrefinementtrace.create(
                             data={
                                 "prompt": prompt,
-                                "output": response.choices[i].message.content,
+                                "output": response[i],
                                 "outputCode": None,
                                 "valid": False,
                                 "errorMessage": "Failed to extract Lean code",
@@ -99,6 +103,15 @@ class StatementRefinementAgent(BaseAgent):
                         )
                         continue
 
+                    # Check for cancellation during verification loop
+                    if await self.is_cancelled(state):
+                        logger.info(
+                            f"Statement Refinement Agent: State {state.id} cancelled during verification"
+                        )
+                        await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
+                        break
+
                     valid, messages, error_str = await self.context.verifier.verify(
                         code, True
                     )
@@ -107,7 +120,7 @@ class StatementRefinementAgent(BaseAgent):
                     await self.db.statementrefinementtrace.create(
                         data={
                             "prompt": prompt,
-                            "output": response.choices[i].message.content,
+                            "output": response[i],
                             "outputCode": code,
                             "valid": valid,
                             "errorMessage": error_str if not valid else "",
@@ -137,14 +150,24 @@ class StatementRefinementAgent(BaseAgent):
                 # Set the final formalization as the formal statement
                 state.formal_statement = final_formalization
                 await self.add_state_request("theorem_retrieval_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
+
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Statement Refinement Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Error in Statement Refinement Agent: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass
 

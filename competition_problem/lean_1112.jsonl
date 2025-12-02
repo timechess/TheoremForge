@@ -1,0 +1,10 @@
+{"id":"c1817","nl_problem":"Let G be a finite group. Suppose there exists a positive natural number n such that for every element g in G, raising g to the power of n results in the identity element (g^n = 1). Prove that the exponent of G is less than or equal to n. (The exponent of a group is the least common multiple of the orders of all its elements)."}
+{"id":"c1372","nl_problem":"Prove the identity: $\\sum_{k=0}^{m} {n+k\\choose k} = {n+m+1\\choose m}$"}
+{"id":"c1105","nl_problem":"Prove the identity: $\\sum_{k=0}^{m} {n+k\\choose k} = {n+m+1\\choose m}$"}
+{"id":"c242","nl_problem":"Find the $2 \\times 2$ matrix $\\mathbf{M}$ such that $\\mathbf{M} \\begin{pmatrix} 2 \\\\ 7 \\end{pmatrix} = \\begin{pmatrix} -15 \\\\ -6 \\end{pmatrix}$ and $\\mathbf{M} \\begin{pmatrix} 4 \\\\ -1 \\end{pmatrix} = \\begin{pmatrix} 15 \\\\ 18 \\end{pmatrix}.$"}
+{"id":"c1809","nl_problem":"Prove that the Bernstein polynomial of degree 'n' and index 'ν' evaluated at 1 is equal to 1 if 'ν' equals 'n', and 0 otherwise."}
+{"id":"c1093","nl_problem":"Find all functions $f: \\mathbb{R} \\rightarrow \\mathbb{R}$ such that $f(x+y) = f(x) + y$ for all $x, y \\in \\mathbb{R}$."}
+{"id":"c1713","nl_problem":"Prove that the center of a group is a normal subgroup."}
+{"id":"c603","nl_problem":"Suppose $x-3$ and $y+3$ are multiples of $7$.\n\nWhat is the smallest positive integer, $n,$ for which $x^2+xy+y^2+n$ is a multiple of $7$?"}
+{"id":"c1643","nl_problem":"Prove that a number \\(x\\) is strictly less than the minimum element of a set \\(s\\) (denoted as \\(s.min'\\)) if and only if \\(x\\) is strictly less than every element in \\(s\\)."}
+{"id":"c1822","nl_problem":"Let \\(R\\) be a ring and \\(M\\) be a module over \\(R\\). Consider two \\(R\\)-linear maps \\(f\\) and \\(g\\) from \\(R\\) to \\(M\\). Prove that \\(f\\) and \\(g\\) are equal if and only if \\(f(1) = g(1)\\), where \\(1\\) is the multiplicative identity in \\(R\\)."}

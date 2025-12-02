@@ -5,7 +5,7 @@ from uuid import uuid4
 from theoremforge.prompt_manager import prompt_manager
 import re
 from openai import AsyncOpenAI
-
+from theoremforge.utils import call_llm_interruptible, CancellationError
 
 class SubgoalExtractionAgent(BaseAgent):
     def __init__(
@@ -34,27 +34,29 @@ class SubgoalExtractionAgent(BaseAgent):
                     f"Subgoal Extraction Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = (
-                        state.id in self.context.black_list
-                        or state.parent_id in self.context.black_list
-                    )
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
                 prompt = prompt_manager.subgoal_extraction(state.proof_sketch)
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "subgoal_extraction_agent",
                 )
-                output = response.choices[0].message.content
+                output = response[0]
                 subgoals = self._extract_subgoals(output)
-                
+
                 subgoal_ids = [str(uuid4()) for _ in subgoals]
-                
+
                 # Save trace to database
                 await self.db.subgoalextractiontrace.create(
                     data={
@@ -66,12 +68,13 @@ class SubgoalExtractionAgent(BaseAgent):
                         "stateId": state.id,
                     }
                 )
-                
+
                 if not subgoals:
                     logger.info(
                         f"Subgoal Extraction Agent: No subgoals found for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
                 logger.info(
                     f"Subgoal Extraction Agent: Found {len(subgoals)} subgoals for state {state.id}"
@@ -90,13 +93,22 @@ class SubgoalExtractionAgent(BaseAgent):
                     await self.add_state_request("informal_proof_agent", new_state)
                 state.subgoals = subgoal_ids
                 await self.add_state_request("proof_assembly_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Subgoal Extraction Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Subgoal Extraction Agent: Error processing state: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass

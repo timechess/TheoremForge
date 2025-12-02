@@ -34,6 +34,7 @@ from theoremforge.agents.statement_refinement_agent import StatementRefinementAg
 from theoremforge.agents.formalization_selection_agent import (
     FormalizationSelectionAgent,
 )
+from theoremforge.agents.assembly_correction_agent import AssemblyCorrectionAgent
 from theoremforge.agents.finish_agent import FinishAgent
 from theoremforge.config import config
 from theoremforge.db import MongoDBClient
@@ -105,6 +106,10 @@ class TheoremForgeStateManager:
             self.custom_config.get("proof_assembly_agent")
             or config.proof_assembly_agent
         )
+        assembly_correction_config = (
+            self.custom_config.get("assembly_correction_agent")
+            or config.assembly_correction_agent
+        )
         statement_norm_config = (
             self.custom_config.get("statement_normalization_agent")
             or config.statement_normalization_agent
@@ -156,6 +161,7 @@ class TheoremForgeStateManager:
             subgoal_extraction_config,
             retrieval_config,
             assembly_config,
+            assembly_correction_config,
             statement_norm_config,
             autoformalization_config,
             semantic_check_config,
@@ -193,6 +199,7 @@ class TheoremForgeStateManager:
         subgoal_extraction_config,
         retrieval_config,
         assembly_config,
+        assembly_correction_config,
         statement_norm_config,
         autoformalization_config,
         semantic_check_config,
@@ -271,6 +278,17 @@ class TheoremForgeStateManager:
         assembly_model = assembly_config.get("model", "gpt-5-chat-latest")
         assembly_api_key = config.get_api_key(assembly_config)
         assembly_sampling = assembly_config.get("sampling_params", {})
+
+        assembly_correction_url = assembly_correction_config.get(
+            "base_url", "https://api.openai-proxy.org/v1"
+        )
+        assembly_correction_model = assembly_correction_config.get(
+            "model", "gpt-5-chat-latest"
+        )
+        assembly_correction_api_key = config.get_api_key(assembly_correction_config)
+        assembly_correction_sampling = assembly_correction_config.get(
+            "sampling_params", {}
+        )
 
         statement_norm_url = statement_norm_config.get(
             "base_url", "https://api.openai-proxy.org/v1"
@@ -510,6 +528,17 @@ class TheoremForgeStateManager:
             for _ in range(self.max_workers)
         ]
 
+        self.context.agents["assembly_correction_agent"] = [
+            AssemblyCorrectionAgent(
+                context=self.context,
+                base_url=assembly_correction_url,
+                api_key=assembly_correction_api_key,
+                model_name=assembly_correction_model,
+                sampling_params=assembly_correction_sampling,
+            )
+            for _ in range(self.max_workers)
+        ]
+
         self.context.agents["finish_agent"] = [
             FinishAgent(
                 context=self.context,
@@ -565,7 +594,16 @@ class TheoremForgeStateManager:
         logger.info("Stopping TheoremForge Manager...")
         self._running = False
 
+        # Trigger cancellation for all active states
+        logger.info("Triggering cancellation for all active states...")
+        async with self.context.cancellation_lock:
+            for state_id, event in self.context.cancellation_events.items():
+                if not event.is_set():
+                    event.set()
+                    logger.debug(f"Triggered cancellation for state {state_id}")
+
         # Cancel all agent tasks
+        logger.info("Cancelling all agent tasks...")
         for task in self.agent_tasks:
             task.cancel()
 
@@ -580,6 +618,11 @@ class TheoremForgeStateManager:
                 logger.warning("Some agent tasks did not complete within timeout")
             except Exception as e:
                 logger.error(f"Error during shutdown: {e}")
+        
+        # Clear all cancellation events
+        async with self.context.cancellation_lock:
+            self.context.cancellation_events.clear()
+            logger.debug("Cleared all cancellation events")
 
         # Disconnect shared MongoDB database
         try:
@@ -699,12 +742,8 @@ class TheoremForgeStateManager:
             metadata=metadata or {},
         )
 
-        # Submit to prover agent (entry point)
-        task_queue_lengths = [
-            agent.task_queue.qsize() for agent in self.context.agents["theorem_retrieval_agent"]
-        ]
-        min_index = task_queue_lengths.index(min(task_queue_lengths))
-        await self.context.agents["theorem_retrieval_agent"][min_index].task_queue.put(new_state)
+        # Submit to theorem retrieval agent (entry point)
+        await self.context.shared_queues["theorem_retrieval_agent"].put(new_state)
 
         # Track this as a root state
         async with self.context.root_state_ids_lock:
@@ -750,14 +789,7 @@ class TheoremForgeStateManager:
         )
 
         # Submit to statement normalization agent (entry point for informal statements)
-        task_queue_lengths = [
-            agent.task_queue.qsize()
-            for agent in self.context.agents["statement_normalization_agent"]
-        ]
-        min_index = task_queue_lengths.index(min(task_queue_lengths))
-        await self.context.agents["statement_normalization_agent"][
-            min_index
-        ].task_queue.put(new_state)
+        await self.context.shared_queues["statement_normalization_agent"].put(new_state)
 
         # Track this as a root state
         async with self.context.root_state_ids_lock:
@@ -848,8 +880,8 @@ class TheoremForgeStateManager:
         return {
             **self.stats,
             "queue_sizes": {
-                name: [a.task_queue.qsize() for a in agent]
-                for name, agent in self.context.agents.items()
+                name: self.context.shared_queues[name].qsize()
+                for name in self.context.agents.keys()
             },
             "blacklist_size": blacklist_len,
             "record_size": total_record_len,
@@ -877,7 +909,7 @@ class TheoremForgeStateManager:
             active_queues = {
                 name: size
                 for name, size in queue_sizes.items()
-                if any(s > 0 for s in size) and name != "finish_agent"
+                if size > 0 and name != "finish_agent"
             }
 
             # If no active queues and we've processed everything submitted
@@ -885,9 +917,7 @@ class TheoremForgeStateManager:
                 # Give finish_agent time to drain
                 await asyncio.sleep(1.0)
                 stats = await self.get_stats()
-                if all(
-                    size == 0 for size in stats["queue_sizes"].get("finish_agent", [])
-                ):
+                if stats["queue_sizes"].get("finish_agent", 0) == 0:
                     break
 
             # Log progress

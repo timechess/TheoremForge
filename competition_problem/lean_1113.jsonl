@@ -1,0 +1,10 @@
+{"id":"c597","nl_problem":"If the six digits 1, 2, 3, 5, 5 and 8 are randomly arranged into a six-digit positive integer, what is the probability that the integer is divisible by 15? Express your answer as a common fraction."}
+{"id":"c200","nl_problem":"A steel sphere with a 3-inch radius is made by removing metal from the corners of a cube that has the shortest possible side lengths. How many cubic inches are in the volume of the cube?"}
+{"id":"c700","nl_problem":"The nine horizontal and nine vertical lines on an $8\\times8$ checkerboard form $r$ rectangles, of which $s$ are squares. The number $s\/r$ can be written in the form $m\/n,$ where $m$ and $n$ are relatively prime positive integers. Find $m + n.$"}
+{"id":"c538","nl_problem":"What is the sum of the squares of the lengths of the $\\textbf{medians}$ of a triangle whose side lengths are $10,$ $10,$ and $12$?"}
+{"id":"c459","nl_problem":"Steve has three quarters, three nickels and three pennies. If Steve selects three coins at random and without replacement, what is the probability that the total value is exactly 35 cents? Express your answer as a common fraction."}
+{"id":"c289","nl_problem":"If $\\tan x+\\tan y=4$ and $\\cot x+\\cot y=5$, compute $\\tan (x+y)$."}
+{"id":"c223","nl_problem":"The diagonals of rectangle $PQRS$ intersect at point $X$.  If $PS = 6$ and $RS=8$, then what is $\\sin \\angle PXS$?"}
+{"id":"c134","nl_problem":"The equation of a parabola is $y^2 + 6y + 2x + 5 = 0.$  Find the vertex of the parabola."}
+{"id":"c404","nl_problem":"Compute\n\\[\\tan \\left( 2 \\arctan \\frac{1}{5} - \\frac{\\pi}{4} \\right).\\]"}
+{"id":"c364","nl_problem":"Let $x$ and $y$ be positive real numbers such that $4x + 9y = 60.$  Find the maximum value of $xy.$"}

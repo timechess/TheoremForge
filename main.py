@@ -3,11 +3,13 @@ import asyncio
 import argparse
 import json
 import os
-from theoremforge.utils import remove_comments
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_path", type=str, required=True)
-parser.add_argument("--export_file", type=str, required=True)
 parser.add_argument("--output_file", type=str, required=True)
 parser.add_argument("--specific_ids", type=str, required=False)
 parser.add_argument(
@@ -20,7 +22,7 @@ args = parser.parse_args()
 # Get the list of completed IDs if retrying failed problems
 completed_ids = set()
 if args.retry_failed:
-    output_path = "competition_result/" + args.output_file
+    output_path = args.output_file
     if os.path.exists(output_path):
         print(f"Retry mode: Loading completed IDs from {output_path}")
         with open(output_path, "r") as f:
@@ -77,38 +79,45 @@ async def main():
 
     await run_theorem_forge(
         informal_statements=informal_statements,
-        max_workers=2,
+        max_workers=8,
         custom_ids=ids,
-        export_file=args.export_file,
+        export_file="tmp.jsonl",
     )
 
     # Process the export file and write to output
-    output_path = "competition_result/" + args.output_file
+    output_path = args.output_file
 
     # In retry mode, append to existing file; otherwise, overwrite
     mode = "a" if args.retry_failed and os.path.exists(output_path) else "w"
 
-    with open(args.export_file, "r") as f:
+    def transform_to_output(data: dict):
+        if not data["formal_proof"]:
+            return None
+        formal_statement = (
+            data.get("formal_statement", "").rsplit(":=", 1)[0] + ":="
+            if ":=" in data.get("formal_statement", "")
+            else data.get("formal_statement", "")
+        )
+        record = {
+            "id": data["custom_id"],
+            "nl_problem": data["informal_statement"],
+            "formal_type": "Lean",
+            "header": data["header"]
+            + data.get("formal_proof", "").split(formal_statement)[0],
+            "formal_statement": formal_statement,
+            "formal_code": data["header"] + data.get("formal_proof", ""),
+        }
+        return record
+
+    with open("tmp.jsonl", "r") as f:
         with open(output_path, mode) as g:
             for line in f:
                 data = json.loads(line)
-                if not data["formal_proof"]:
+                record = transform_to_output(data)
+                if record:
+                    g.write(json.dumps(record, ensure_ascii=False) + "\n")
+                else:
                     continue
-                formal_statement = (
-                    data.get("formal_statement", "").rsplit(":=", 1)[0] + ":="
-                    if ":=" in data.get("formal_statement", "")
-                    else data.get("formal_statement", "")
-                )
-                record = {
-                    "id": data["custom_id"],
-                    "nl_problem": data["informal_statement"],
-                    "formal_type": "Lean",
-                    "header": data["header"]
-                    + data.get("formal_proof", "").split(formal_statement)[0],
-                    "formal_statement": formal_statement,
-                    "formal_code": data["header"] + data.get("formal_proof", ""),
-                }
-                g.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     if args.retry_failed:
         print(f"Retry mode: Results appended to {output_path}")

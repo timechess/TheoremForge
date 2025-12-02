@@ -30,7 +30,8 @@ Your task is to modify the Lean 4 formalization according to the given hint whil
 3. If the problem asks for a solution, the formal statement should use the conditions to derive the solution instead of verifying the solution. (e.g. if the problem is to solve `x ^ 2 - 1 = 0`, the formalization should be `x ^ 2 - 1 = 0 -> x = 1 or x = -1` instead of `x = 1 or x = -1 -> x ^ 2 - 1 = 0`)
 3. Remove the comments in the formalization.
 4. If the informal statement asks for a concrete solution and the normalized statement only captures the universal property, you need to make the formalization reveal the concrete solution.
-5. If the formalization is correct, you can just output the formalization as is.
+5. If the problem needs `largest` or `smallest` element, the formal statement should clarify this property.
+6. If the formalization is correct, you can just output the formalization as is.
 
 ## Instructions
 1. Carefully read and understand the modification hint
@@ -40,6 +41,8 @@ Your task is to modify the Lean 4 formalization according to the given hint whil
 5. The formalization should still capture the informal statement's intent
 6. Output ONLY the modified Lean 4 formal statement, nothing else
 7. DO NOT fill the sorry in the formalization.
+8. DO NOT remove necessary hypotheses or conclusions in the formalization.
+9. DO NOT modify according to facts that need reasoning, keep the statement aligned with the informal statement.
 
 Lean Hint:
 - For `Complex`, use `‖ · ‖` instead of `Complex.abs`.

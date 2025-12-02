@@ -1,0 +1,10 @@
+{"id":"c559","nl_problem":"The quadratic equation $x^2+mx+n=0$ has roots that are twice those of $x^2+px+m=0,$ and none of $m,$ $n,$ and $p$ is zero. What is the value of $n\/p?$"}
+{"id":"c419","nl_problem":"For $1 \\le n \\le 100$, how many integers are there such that $\\frac{n}{n+1}$ is a repeating decimal?"}
+{"id":"c4001","nl_problem":"Prove that if $H$ is a subgroup of $G$ of index $n$, then there is a normal subgroup $K$ of $G$ such that $K\\leq H$ and $[G:K]\\leq n!$"}
+{"id":"c765","nl_problem":"A circle rests in the interior of the parabola with equation $y = x^2,$ so that it is tangent to the parabola at two points.  How much higher is the center of the circle than the points of tangency?"}
+{"id":"c56","nl_problem":"When a fair six-sided die is tossed on a table top, the bottom face cannot be seen.  What is the probability that the product of the  numbers on the five faces that can be seen is divisible by 6?"}
+{"id":"c82","nl_problem":"An octagon is inscribed in a square so that the vertices of the octagon trisect the sides of the square. The perimeter of the square is 108 centimeters. What is the number of square centimeters in the area of the octagon?"}
+{"id":"c4018","nl_problem":"Prove that \\( x^2 + y^2 - 1 \\) is irreducible in \\( \\mathbb{Q}[x, y] \\)."}
+{"id":"c4406","nl_problem":"40723824643的质因数都有哪些？"}
+{"id":"c4407","nl_problem":"请问40723824643是质数吗？"}
+{"id":"c485","nl_problem":"Compute $\\tan 20^\\circ + 4 \\sin 20^\\circ.$"}

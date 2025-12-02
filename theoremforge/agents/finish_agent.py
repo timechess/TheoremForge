@@ -1,6 +1,7 @@
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from loguru import logger
+import asyncio
 
 
 class FinishAgent(BaseAgent):
@@ -21,12 +22,23 @@ class FinishAgent(BaseAgent):
                 else:
                     logger.info(f"Finishing state {state.id} failed")
                     self.context.proof_record[state.id] = None
-            # Update black_list with lock
+            # Update black_list with lock and trigger cancellation
             if not state.success:
                 if state.siblings:
+                    # Add siblings to blacklist
                     async with self.context.black_list_lock:
                         for sibling_id in state.siblings:
                             self.context.black_list.add(sibling_id)
+                    
+                    # Trigger cancellation events for siblings to interrupt ongoing work
+                    async with self.context.cancellation_lock:
+                        for sibling_id in state.siblings:
+                            if sibling_id not in self.context.cancellation_events:
+                                self.context.cancellation_events[sibling_id] = asyncio.Event()
+                            self.context.cancellation_events[sibling_id].set()
+                            logger.debug(
+                                f"Triggered cancellation for sibling state {sibling_id}"
+                            )
 
             await self.db.theoremforgestate.create(
                 data={
@@ -42,6 +54,7 @@ class FinishAgent(BaseAgent):
                     "depth": state.depth,
                     "parentId": state.parent_id,
                     "success": state.success,
+                    "tokenTrace": state.token_trace,
                 }
             )
             logger.info(f"Saving state {state.id} to database")

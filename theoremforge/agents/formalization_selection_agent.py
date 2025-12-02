@@ -4,6 +4,7 @@ from loguru import logger
 from openai import AsyncOpenAI
 import re
 from theoremforge.prompt_manager import prompt_manager
+from theoremforge.utils import call_llm_interruptible, CancellationError
 
 
 class FormalizationSelectionAgent(BaseAgent):
@@ -42,15 +43,13 @@ class FormalizationSelectionAgent(BaseAgent):
                     f"Formalization Selection Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Formalization Selection Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 if not state.informal_statement:
@@ -58,6 +57,7 @@ class FormalizationSelectionAgent(BaseAgent):
                         f"Formalization Selection Agent: Missing informal statement for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # Get aligned formalizations from metadata
@@ -68,6 +68,7 @@ class FormalizationSelectionAgent(BaseAgent):
                         f"Formalization Selection Agent: No aligned formalizations found for state {state.id}"
                     )
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 # If only one formalization, no need to select
@@ -77,6 +78,7 @@ class FormalizationSelectionAgent(BaseAgent):
                     )
                     state.formal_statement = aligned_formalizations[0]
                     await self.add_state_request("theorem_retrieval_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 logger.info(
@@ -90,12 +92,16 @@ class FormalizationSelectionAgent(BaseAgent):
                 )
 
                 # Get LLM response
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": selection_prompt}],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    selection_prompt,
+                    self.sampling_params,
+                    "formalization_selection_agent",
                 )
-                selection_output = response.choices[0].message.content
+                selection_output = response[0]
 
                 # Extract analysis and selected index
                 analysis = self._extract_selection_analysis(selection_output)
@@ -142,15 +148,24 @@ class FormalizationSelectionAgent(BaseAgent):
 
                 # Route to statement refinement agent
                 await self.add_state_request("statement_refinement_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Formalization Selection Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Error in Formalization Selection Agent: {e}")
                 import traceback
-
                 traceback.print_exc()
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass
 

@@ -3,7 +3,7 @@ from theoremforge.state import TheoremForgeContext
 from openai import AsyncOpenAI
 import re
 from typing import List
-from theoremforge.utils import payload_to_string
+from theoremforge.utils import payload_to_string, call_llm_interruptible, CancellationError
 from theoremforge.prompt_manager import prompt_manager
 from loguru import logger
 from theoremforge.retriever import Retriever
@@ -46,33 +46,43 @@ class TheoremRetrievalAgent(BaseAgent):
                     f"Theorem Retrieval Agent: Start to process state {state.id}"
                 )
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Theorem Retrieval Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 query_generation_prompt = prompt_manager.theorem_query_generation(
                     state.formal_statement
                 )
 
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": query_generation_prompt},
-                    ],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    query_generation_prompt,
+                    self.sampling_params,
+                    "theorem_retrieval_agent",
                 )
-                query_generation_output = response.choices[0].message.content
+                query_generation_output = response[0]
                 queries = self._extract_search_queries(query_generation_output)
                 logger.info(
                     f"Theorem Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
                 )
+                
+                # Check for cancellation before expensive retrieval operation
+                if await self.is_cancelled(state):
+                    logger.info(
+                        f"Theorem Retrieval Agent: State {state.id} cancelled before retrieval"
+                    )
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
+                    continue
+                
                 result = await self.retriever.search_theorems(queries, 5)
                 query_results = sum(result["results"], [])
                 theorems = "\n".join(
@@ -81,14 +91,16 @@ class TheoremRetrievalAgent(BaseAgent):
                 theorem_selection_prompt = prompt_manager.theorem_selection(
                     state.formal_statement, theorems
                 )
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {"role": "user", "content": theorem_selection_prompt},
-                    ],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    theorem_selection_prompt,
+                    self.sampling_params,
+                    "theorem_retrieval_agent",
                 )
-                theorem_selection_output = response.choices[0].message.content
+                theorem_selection_output = response[0]
                 theorem_names = self._extract_theorems(theorem_selection_output)
                 selected_theorems = [
                     theorem["payload"]
@@ -116,17 +128,26 @@ class TheoremRetrievalAgent(BaseAgent):
                         "stateId": state.id,
                     }
                 )
-                
+
                 state.metadata["useful_theorems"] = "\n".join(theorem_selection_results)
                 await self.add_state_request("informal_proof_agent", state)
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Theorem Retrieval Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Theorem Retrieval Agent: Error processing state: {e}")
                 import traceback
-
                 traceback.print_exc()
                 # Try to route to finish even on error
                 try:
                     if "state" in locals():
                         await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
                 except Exception:
                     pass

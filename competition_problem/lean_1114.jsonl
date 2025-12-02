@@ -1,0 +1,10 @@
+{"id":"c28","nl_problem":"If $x^2 + y = 4$ and $x^4 +y^2 = 10$, then what is $x^2y$?"}
+{"id":"c198","nl_problem":"Let $p(x)$ be a monic polynomial of degree 4.  Three of the roots of $p(x)$ are 1, 2, and 3.  Find $p(0) + p(4).$"}
+{"id":"c523","nl_problem":"Let $a_1, a_2, a_3,\\dots$ be an increasing arithmetic sequence of integers. If $a_4a_5 = 13$, what is $a_3a_6$?"}
+{"id":"c726","nl_problem":"Find all values of $x$ that satisfy\n\\[5x - 1 < (x + 1)^2 < 7x - 3.\\]"}
+{"id":"c667","nl_problem":"Suppose that $a$ and $b$ are positive integers such that $(a+bi)^2 = 3+4i$. What is $a+bi$?"}
+{"id":"c409","nl_problem":"Find the value of $a$ so that the lines described by\n\\[\\begin{pmatrix} 2 \\\\ -1 \\\\ 0 \\end{pmatrix} + t \\begin{pmatrix} a \\\\ -2 \\\\ 1 \\end{pmatrix}\\]and\n\\[\\begin{pmatrix} 1 \\\\ -3\/2 \\\\ -5 \\end{pmatrix} + u \\begin{pmatrix} 1 \\\\ 3\/2 \\\\ 2 \\end{pmatrix}\\]are perpendicular."}
+{"id":"c611","nl_problem":"Compute the sum\n\\[\\sum_{i = 0}^\\infty \\sum_{j = 0}^\\infty \\frac{1}{(i + j + 1)(i + j + 2)(i + j + 3)(i + j + 4)(i + j + 5)(i + j + 6)(i + j + 7)}.\\]"}
+{"id":"c499","nl_problem":"The lengths of the sides of a triangle are consecutive integers, and the largest angle is twice the smallest angle.  Find the cosine of the smallest angle."}
+{"id": "c4014", "nl_problem": "Let $S$ be any ring and let $n>2$ be an integer.\n    Prove that if \\( A \\) is any strictly upper triangular matrix in \\( M_n(S) \\), then \\( A^n = 0 \\). (A strictly upper triangular matrix is one whose entries on and below the main diagonal are all zero.)"}
+{"id": "c4064", "nl_problem": "Let $K$ be a finite extension of a field $F$, and let $f(x) \\in K[x]$. Prove that there exists a nonzero polynomial $g(x) \\in K[x]$ such that $f(x)g(x) \\in F[x]$."}

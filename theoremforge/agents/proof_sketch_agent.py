@@ -1,7 +1,7 @@
 from openai import AsyncOpenAI
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 from theoremforge.prompt_manager import prompt_manager
 from loguru import logger
 
@@ -27,15 +27,22 @@ class ProofSketchAgent(BaseAgent):
         while True:
             try:
                 state = await self.task_queue.get()
-                logger.info(f"Proof Sketch Agent: Start to process state {state.id}")
+                logger.info(f"Proof Sketch Agent: Processing state {state.id}")
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
 
-                if is_blacklisted:
-                    logger.debug(f"Proof Sketch Agent: State {state.id} is blacklisted, routing to finish")
+                # Register cancellation event for this state
+
+                await self.register_cancellation_event(state)
+
+
+                # Check if state should be skipped (blacklisted or cancelled)
+
+                if await self.should_skip_state(state):
+
                     await self.add_state_request("finish_agent", state)
+
+                    await self.cleanup_cancellation_event(state)
+
                     continue
 
                 prompt = prompt_manager.proof_sketch_generation(
@@ -43,13 +50,17 @@ class ProofSketchAgent(BaseAgent):
                     state.informal_proof,
                     state.metadata["useful_theorems"],
                 )
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    **self.sampling_params,
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "proof_sketch_agent",
                 )
                 proof_sketches = [
-                    extract_lean_code(choice.message.content) for choice in response.choices
+                    extract_lean_code(code) for code in response
                 ]
                 if not any(proof_sketches):
                     logger.info(
@@ -59,7 +70,7 @@ class ProofSketchAgent(BaseAgent):
                     await self.db.proofsketchtrace.create(
                         data={
                             "prompt": prompt,
-                            "output": response.choices[0].message.content,
+                            "output": response[0],
                             "formalStatement": state.formal_statement,
                             "informalProof": state.informal_proof,
                             "usefulTheorems": state.metadata["useful_theorems"],
@@ -110,7 +121,7 @@ class ProofSketchAgent(BaseAgent):
                     await self.db.proofsketchtrace.create(
                         data={
                             "prompt": prompt,
-                            "output": response.choices[last_i].message.content,
+                            "output": response[last_i],
                             "formalStatement": state.formal_statement,
                             "informalProof": state.informal_proof,
                             "usefulTheorems": state.metadata.get("useful_theorems", ""),
@@ -127,6 +138,18 @@ class ProofSketchAgent(BaseAgent):
                         f"Proof Sketch Agent: All sketches were empty for state {state.id}, sending to finish"
                     )
                     await self.add_state_request("finish_agent", state)
+            except CancellationError as e:
+
+                # State was cancelled during processing
+
+                logger.info(f"Proof Sketch Agent: {e}")
+
+                if "state" in locals():
+
+                    await self.add_state_request("finish_agent", state)
+
+                    await self.cleanup_cancellation_event(state)
+
             except Exception as e:
                 logger.error(f"Proof Sketch Agent: Error processing state: {e}")
                 import traceback

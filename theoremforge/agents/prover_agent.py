@@ -1,7 +1,7 @@
 from loguru import logger
 from openai import AsyncOpenAI
 from theoremforge.state import TheoremForgeContext
-from theoremforge.utils import extract_lean_code
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.prompt_manager import prompt_manager
 
@@ -29,15 +29,13 @@ class ProverAgent(BaseAgent):
                 state = await self.task_queue.get()
                 logger.info(f"Prover Agent: Start to process state {state.id}")
 
-                # Check black_list with lock
-                async with self.context.black_list_lock:
-                    is_blacklisted = state.id in self.context.black_list or state.parent_id in self.context.black_list
+                # Register cancellation event for this state
+                await self.register_cancellation_event(state)
 
-                if is_blacklisted:
-                    logger.debug(
-                        f"Prover Agent: State {state.id} is blacklisted, routing to finish"
-                    )
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
                     await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
                     continue
 
                 useful_theorems = state.metadata.get("useful_theorems", "")
@@ -45,29 +43,35 @@ class ProverAgent(BaseAgent):
                     state.formal_statement, useful_theorems
                 )
 
-                response = await self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        }
-                    ],
-                    **self.sampling_params,
+                # Use interruptible LLM call
+                response = await call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "prover_agent",
                 )
                 codes = [
-                    extract_lean_code(choice.message.content)
-                    for choice in response.choices
+                    extract_lean_code(code)
+                    for code in response
                 ]
                 logger.debug(
                     f"Prover Agent: Generated {len(codes)} codes for state {state.id}"
                 )
 
                 if not any(codes):
-                    logger.info(
-                        f"Prover Agent: Failed to generate formal proof for state {state.id}, routing to finish_agent"
-                    )
-                    await self.add_state_request("finish_agent", state)
+                    if state.parent_id:
+                        logger.info(
+                            f"Prover Agent: Failed to generate formal proof for state {state.id}, routing to finish_agent"
+                        )
+                        await self.add_state_request("finish_agent", state)
+                    else:
+                        logger.info(
+                            f"Prover Agent: Failed to generate formal proof for state {state.id}, routing to proof_sketch_agent"
+                        )
+                        await self.add_state_request("proof_sketch_agent", state)
                     continue
 
                 valid_flag = False
@@ -79,6 +83,15 @@ class ProverAgent(BaseAgent):
 
                     if not code:
                         continue
+
+                    # Check for cancellation before verification
+                    if await self.is_cancelled(state):
+                        logger.info(
+                            f"Prover Agent: State {state.id} cancelled during verification loop"
+                        )
+                        await self.add_state_request("finish_agent", state)
+                        await self.cleanup_cancellation_event(state)
+                        break
 
                     valid, messages, error_str = await self.context.verifier.verify(
                         code, False
@@ -93,12 +106,12 @@ class ProverAgent(BaseAgent):
                         await self.add_state_request("finish_agent", state)
                     else:
                         failed_proofs.append((code, error_str))
-                        failed_response.append(response.choices[i].message.content)
+                        failed_response.append(response[i])
 
                     await self.db.provertrace.create(
                         data={
                             "prompt": prompt,
-                            "output": response.choices[i].message.content,
+                            "output": response[i],
                             "formalStatement": state.formal_statement,
                             "outputCode": code,
                             "valid": valid,
@@ -111,6 +124,10 @@ class ProverAgent(BaseAgent):
                     f"Prover Agent: Finished processing {len(codes)} codes, valid_flag={valid_flag}, failed_proofs={len(failed_proofs)}"
                 )
 
+                # Clean up cancellation event if processing completed normally
+                if valid_flag:
+                    await self.cleanup_cancellation_event(state)
+                
                 if not valid_flag:
                     if failed_proofs:
                         logger.info(
@@ -141,7 +158,16 @@ class ProverAgent(BaseAgent):
                         logger.debug(
                             f"Prover Agent: Successfully routed state {state.id} to finish_agent"
                         )
+                
+                # Cleanup cancellation event after routing
+                await self.cleanup_cancellation_event(state)
 
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"Prover Agent: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+                    await self.cleanup_cancellation_event(state)
             except Exception as e:
                 logger.error(f"Prover Agent: Error processing state: {e}")
                 import traceback
