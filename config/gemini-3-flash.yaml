@@ -1,5 +1,5 @@
 LeanServerConfig:
-  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.21.0 # Your local Lean project path
+  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.19.0 # Your local Lean project path
   LeanServerPort: 8000 # The port of the verifier server
   LeanServerWorkers: 8 # The number of workers for the verifier server
   LeanServerHeader: "import Mathlib\n" # The header of the verifier server
@@ -8,134 +8,137 @@ LeanServerConfig:
   MaxProcessMemory: 0.6 # The maximum process memory of the verifier server
 
 StatementNormalizationAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "gpt-5.1"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 RetrievalAgentConfig:
-  retriever_url: "http://localhost:8001"
-  base_url: "https://api.deepseek.com"
-  model: "deepseek-chat"
-  api_key: "DEEPSEEK_API_KEY"  # Environment variable name
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
+  api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 AutoformalizationAgentConfig:
   base_url: "http://localhost:8003/v1"
-  model: "model/ReForm-8B"
+  model: "model/ReForm-32B"
   api_key: "LOCAL"  # For local models
   sampling_params:
     temperature: 0.6
-    n: 8
+    n: 4
     max_tokens: 8192
 
 SemanticCheckAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 StatementCorrectionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
-    temperature: 0.0
-    n: 1
-
-StatementRefinementAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
-  api_key: "CLOSEAI_API_KEY"  # Environment variable name
-  sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 FormalizationSelectionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 ProverAgentConfig:
   base_url: "http://localhost:8002/v1"
-  model: "model/Goedel-Prover-V2-8B"
+  model: "model/Goedel-Prover-V2-32B"
   api_key: "LOCAL"  # Environment variable name
   sampling_params:
-    temperature: 0.4
-    n: 16
+    temperature: 0.6
+    n: 4
     max_tokens: 8192
 
 ProofCorrectionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 SketchCorrectionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
-
 ShallowSolveAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
-  max_rounds: 2
+  max_rounds: 3
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 InformalProofAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "gpt-5.1"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 ProofSketchAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 SubgoalExtractionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 ProofAssemblyAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1
 
 AssemblyCorrectionAgentConfig:
-  base_url: "https://api.openai-proxy.org/v1"
-  model: "claude-haiku-4-5"
+  base_url: "https://api.openai-proxy.org/google"
+  model: "gemini-3-flash-preview"
   api_key: "CLOSEAI_API_KEY"  # Environment variable name
   sampling_params:
+    thinking_level: "low"
     temperature: 0.0
     n: 1

@@ -1,9 +1,13 @@
 import asyncio
 from loguru import logger
 from theoremforge.agents.base_agent import BaseAgent
-from theoremforge.state import TheoremForgeContext
+from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from openai import AsyncOpenAI
-from theoremforge.utils import extract_lean_code, call_llm_interruptible, CancellationError
+from google.genai import Client
+from theoremforge.utils import (
+    extract_lean_code,
+    call_llm_interruptible,
+)
 from theoremforge.prompt_manager import prompt_manager
 
 
@@ -20,171 +24,92 @@ class ProofCorrectionAgent(BaseAgent):
             agent_name="proof_correction_agent",
             context=context,
         )
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=1500)
+        if model_name.startswith("gemini-"):
+            self.client = Client(api_key=api_key, http_options={"base_url": base_url}, vertexai=True)
+        else:
+            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=1500)
         self.model_name = model_name
         self.sampling_params = sampling_params
 
-    async def run(self):
-        while True:
-            try:
-                state = await self.task_queue.get()
-                logger.info(
-                    f"Proof Correction Agent: Start to process state {state.id}"
+    async def _run(self, state: TheoremForgeState):
+        failed_attempts = state.metadata["failed_attempts"]
+
+        logger.info(
+            f"Proof Correction Agent: Processing {len(failed_attempts)} failed attempts for state {state.id}"
+        )
+        prompts = [
+            prompt_manager.proof_correction(
+                failed_attempt["code"],
+                failed_attempt["error_str"],
+            )
+            for failed_attempt in failed_attempts
+        ]
+
+        # Send all LLM requests in parallel with cancellation support
+        logger.debug(
+            f"Proof Correction Agent: Sending {len(prompts)} correction requests in parallel for state {state.id}"
+        )
+        responses = await asyncio.gather(
+            *[
+                call_llm_interruptible(
+                    state,
+                    self.context,
+                    self.client,
+                    self.model_name,
+                    prompt,
+                    self.sampling_params,
+                    "proof_correction_agent",
                 )
+                for prompt in prompts
+            ]
+        )
 
-                # Register cancellation event for this state
-                await self.register_cancellation_event(state)
+        # Process all responses and verify codes
+        valid_flag = False
+        for attempt_idx, (response, prompt) in enumerate(zip(responses, prompts)):
+            if valid_flag:
+                break
 
-                # Check if state should be skipped (blacklisted or cancelled)
-                if await self.should_skip_state(state):
-                    await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-                    continue
+            codes = [extract_lean_code(code) for code in response]
 
-                # Support both old format (single failed_attempt) and new format (multiple failed_attempts)
-                failed_attempts = []
-                if "failed_attempts" in state.metadata:
-                    failed_attempts = state.metadata["failed_attempts"]
-                elif "failed_attempt" in state.metadata:
-                    # Backward compatibility with old format
-                    failed_attempts = [state.metadata["failed_attempt"]]
-                else:
-                    logger.error(
-                        f"Proof Correction Agent: No failed attempts found for state {state.id}"
+            for i, code in enumerate(codes):
+                if valid_flag:
+                    break
+
+                # Check for cancellation during verification loop
+                if await self.is_cancelled(state):
+                    logger.info(
+                        f"Proof Correction Agent: State {state.id} cancelled during verification"
                     )
                     await self.add_state_request("finish_agent", state)
+                    return
+
+                if not code:
                     continue
 
-                logger.info(
-                    f"Proof Correction Agent: Processing {len(failed_attempts)} failed attempts for state {state.id}"
+                valid, messages, error_str = await self.context.verifier.verify(
+                    code, False
                 )
 
-                # Generate all prompts
-                if "prev_attempts" in state.metadata:
-                    prev_attempts = state.metadata["prev_attempts"]
-
-                prompts = [
-                    prompt_manager.proof_correction(
-                        failed_attempt["code"],
-                        failed_attempt["error_str"],
+                if valid:
+                    logger.info(
+                        f"Proof Correction Agent: Successfully corrected formal proof for state {state.id} (attempt {attempt_idx + 1})"
                     )
-                    for failed_attempt in failed_attempts
-                ]
-
-                # Send all LLM requests in parallel with cancellation support
-                logger.debug(
-                    f"Proof Correction Agent: Sending {len(prompts)} correction requests in parallel for state {state.id}"
-                )
-                responses = await asyncio.gather(
-                    *[
-                        call_llm_interruptible(
-                            state,
-                            self.context,
-                            self.client,
-                            self.model_name,
-                            prev_attempt + [{"role": "user", "content": prompt}],
-                            self.sampling_params,
-                            "proof_correction_agent",
-                        )
-                        for prev_attempt, prompt in zip(prev_attempts, prompts)
-                    ]
-                )
-
-                # Process all responses and verify codes
-                valid_flag = False
-                for attempt_idx, (response, prompt) in enumerate(
-                    zip(responses, prompts)
-                ):
-                    if valid_flag:
-                        break
-
-                    codes = [
-                        extract_lean_code(code)
-                        for code in response
-                    ]
-
-                    for i, code in enumerate(codes):
-                        if valid_flag:
-                            break
-
-                        # Check for cancellation during verification loop
-                        if await self.is_cancelled(state):
-                            logger.info(
-                                f"Proof Correction Agent: State {state.id} cancelled during verification"
-                            )
-                            await self.add_state_request("finish_agent", state)
-                            await self.cleanup_cancellation_event(state)
-                            valid_flag = True  # Break outer loop
-                            break
-
-                        if not code:
-                            await self.db.proofcorrectiontrace.create(
-                                data={
-                                    "prompt": prompt,
-                                    "output": response[i],
-                                    "outputCode": None,
-                                    "valid": False,
-                                    "errorMessage": "Failed to extract Lean code",
-                                    "stateId": state.id,
-                                    "attemptIndex": attempt_idx,
-                                }
-                            )
-                            continue
-
-                        valid, messages, error_str = await self.context.verifier.verify(
-                            code, False
-                        )
-
-                        if valid:
-                            logger.info(
-                                f"Proof Correction Agent: Successfully corrected formal proof for state {state.id} (attempt {attempt_idx + 1})"
-                            )
-                            state.formal_proof = code
-                            state.success = True
-                            valid_flag = True
-                            await self.add_state_request("finish_agent", state)
-
-                        await self.db.proofcorrectiontrace.create(
-                            data={
-                                "prompt": prompt,
-                                "output": response[i],
-                                "outputCode": code,
-                                "valid": valid,
-                                "errorMessage": error_str,
-                                "stateId": state.id,
-                                "attemptIndex": attempt_idx,
-                            }
-                        )
-
-                if not valid_flag:
-                    # Check if this is a subgoal (has parent_id)
-                    if state.parent_id:
-                        logger.info(
-                            f"Proof Correction Agent: Failed to correct subgoal {state.id}, routing to finish_agent"
-                        )
-                        await self.add_state_request("finish_agent", state)
-                    else:
-                        logger.info(
-                            f"Proof Correction Agent: Failed to correct formal proof for state {state.id}, routing to shallow_solve_agent"
-                        )
-                        await self.add_state_request("shallow_solve_agent", state)
-
-                # Cleanup cancellation event
-                await self.cleanup_cancellation_event(state)
-
-            except CancellationError as e:
-                # State was cancelled during processing
-                logger.info(f"Proof Correction Agent: {e}")
-                if "state" in locals():
+                    state.formal_proof = code
+                    state.success = True
+                    valid_flag = True
                     await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-            except Exception as e:
-                logger.error(f"Proof Correction Agent: Error processing state: {e}")
-                import traceback
+                    return
 
-                traceback.print_exc()
-                try:
-                    if "state" in locals():
-                        await self.add_state_request("finish_agent", state)
-                except Exception:
-                    pass
+        if not valid_flag:
+            # Check if this is a subgoal (has parent_id)
+            if state.parent_id:
+                logger.info(
+                    f"Proof Correction Agent: Failed to correct subgoal {state.id}, routing to informal_proof_agent"
+                )
+                await self.add_state_request("informal_proof_agent", state)
+            else:
+                logger.info(
+                    f"Proof Correction Agent: Failed to correct formal proof for state {state.id}, routing to theorem_retrieval_agent"
+                )
+                await self.add_state_request("theorem_retrieval_agent", state)

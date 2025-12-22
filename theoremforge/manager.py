@@ -13,6 +13,7 @@ from pathlib import Path
 from loguru import logger
 from dotenv import load_dotenv
 
+from theoremforge.config import Config
 from theoremforge.state import TheoremForgeState, TheoremForgeContext
 from theoremforge.agents.prover_agent import ProverAgent
 from theoremforge.agents.proof_correction_agent import ProofCorrectionAgent
@@ -30,14 +31,12 @@ from theoremforge.agents.definition_retrieval_agent import DefinitionRetrievalAg
 from theoremforge.agents.autoformalization_agent import AutoformalizationAgent
 from theoremforge.agents.semantic_check_agent import SemanticCheckAgent
 from theoremforge.agents.statement_correction_agent import StatementCorrectionAgent
-from theoremforge.agents.statement_refinement_agent import StatementRefinementAgent
 from theoremforge.agents.formalization_selection_agent import (
     FormalizationSelectionAgent,
 )
 from theoremforge.agents.assembly_correction_agent import AssemblyCorrectionAgent
 from theoremforge.agents.finish_agent import FinishAgent
-from theoremforge.config import config
-from theoremforge.db import MongoDBClient
+from theoremforge.db import SQLiteClient
 from theoremforge.retriever import Retriever
 
 load_dotenv()
@@ -57,6 +56,7 @@ class TheoremForgeStateManager:
     def __init__(
         self,
         max_workers: int,
+        config_path: str,
         custom_config: Optional[Dict[str, Any]] = None,
         state_callback: Optional[Callable[[TheoremForgeState], None]] = None,
     ):
@@ -64,91 +64,85 @@ class TheoremForgeStateManager:
         Initialize the state manager.
 
         Args:
-            verifier_url: URL of the Lean verification server
-            retriever_url: URL of the theorem retrieval server
+            max_workers: Maximum number of workers to use
+            config_path: Path to the configuration file
             custom_config: Optional custom configuration
             state_callback: Optional callback for finished states
         """
         self.max_workers = max_workers
+        self.config = Config(config_path)
+
         self.custom_config = custom_config or {}
         self.state_callback = state_callback
 
         # Get configurations
-        lean_config = self.custom_config.get("lean_server") or config.lean_server
-        prover_config = self.custom_config.get("prover_agent") or config.prover_agent
+        lean_config = self.custom_config.get("lean_server") or self.config.lean_server
+        prover_config = (
+            self.custom_config.get("prover_agent") or self.config.prover_agent
+        )
         proof_correction_config = (
             self.custom_config.get("proof_correction_agent")
-            or config.proof_correction_agent
+            or self.config.proof_correction_agent
         )
         sketch_correction_config = (
             self.custom_config.get("sketch_correction_agent")
-            or config.sketch_correction_agent
+            or self.config.sketch_correction_agent
         )
-
         shallow_solve_config = (
-            self.custom_config.get("shallow_solve_agent") or config.shallow_solve_agent
+            self.custom_config.get("shallow_solve_agent")
+            or self.config.shallow_solve_agent
         )
         informal_config = (
             self.custom_config.get("informal_proof_agent")
-            or config.informal_proof_agent
+            or self.config.informal_proof_agent
         )
         sketch_config = (
-            self.custom_config.get("proof_sketch_agent") or config.proof_sketch_agent
+            self.custom_config.get("proof_sketch_agent")
+            or self.config.proof_sketch_agent
         )
         subgoal_extraction_config = (
             self.custom_config.get("subgoal_extraction_agent")
-            or config.subgoal_extraction_agent
+            or self.config.subgoal_extraction_agent
         )
         retrieval_config = (
-            self.custom_config.get("retrieval_agent") or config.retrieval_agent
+            self.custom_config.get("retrieval_agent") or self.config.retrieval_agent
         )
         assembly_config = (
             self.custom_config.get("proof_assembly_agent")
-            or config.proof_assembly_agent
+            or self.config.proof_assembly_agent
         )
         assembly_correction_config = (
             self.custom_config.get("assembly_correction_agent")
-            or config.assembly_correction_agent
+            or self.config.assembly_correction_agent
         )
         statement_norm_config = (
             self.custom_config.get("statement_normalization_agent")
-            or config.statement_normalization_agent
+            or self.config.statement_normalization_agent
         )
         autoformalization_config = (
             self.custom_config.get("autoformalization_agent")
-            or config.autoformalization_agent
+            or self.config.autoformalization_agent
         )
         semantic_check_config = (
             self.custom_config.get("semantic_check_agent")
-            or config.semantic_check_agent
+            or self.config.semantic_check_agent
         )
         statement_correction_config = (
             self.custom_config.get("statement_correction_agent")
-            or config.statement_correction_agent
-        )
-        statement_refinement_config = (
-            self.custom_config.get("statement_refinement_agent")
-            or config.statement_refinement_agent
+            or self.config.statement_correction_agent
         )
         formalization_selection_config = (
             self.custom_config.get("formalization_selection_agent")
-            or config.formalization_selection_agent
+            or self.config.formalization_selection_agent
         )
 
-        # Resolve URLs
-        self.verifier_url = (
-            f"http://localhost:{lean_config.get('LeanServerPort', 8000)}"
-        )
-        self.retrieval_url = retrieval_config.get(
-            "retriever_url", "http://localhost:8002"
-        )
-        self.retriever = Retriever(self.retrieval_url)
+        self.retriever = Retriever()
 
         # Initialize context
-        self.context = TheoremForgeContext(verifier_url=self.verifier_url)
+        self.context = TheoremForgeContext(verifier_config=lean_config)
 
-        # Initialize shared MongoDB client
-        self.context.db = MongoDBClient()
+        # Initialize shared SQLite client
+        self.context.db = SQLiteClient()
 
         # Initialize agents
         self._initialize_agents(
@@ -166,7 +160,6 @@ class TheoremForgeStateManager:
             autoformalization_config,
             semantic_check_config,
             statement_correction_config,
-            statement_refinement_config,
             formalization_selection_config,
         )
 
@@ -204,7 +197,6 @@ class TheoremForgeStateManager:
         autoformalization_config,
         semantic_check_config,
         statement_correction_config,
-        statement_refinement_config,
         formalization_selection_config,
     ):
         """Initialize all agents and register them in the context."""
@@ -213,7 +205,7 @@ class TheoremForgeStateManager:
         # Get configurations and resolve API keys
         prover_url = prover_config.get("base_url", "http://localhost:8001/v1")
         prover_model = prover_config.get("model", "model/Goedel-Prover-V2-32B")
-        prover_api_key = config.get_api_key(prover_config)
+        prover_api_key = self.config.get_api_key(prover_config)
         prover_sampling = prover_config.get("sampling_params", {})
 
         proof_correction_url = proof_correction_config.get(
@@ -222,7 +214,7 @@ class TheoremForgeStateManager:
         proof_correction_model = proof_correction_config.get(
             "model", "gpt-5-chat-latest"
         )
-        proof_correction_api_key = config.get_api_key(proof_correction_config)
+        proof_correction_api_key = self.config.get_api_key(proof_correction_config)
         proof_correction_sampling = proof_correction_config.get("sampling_params", {})
 
         sketch_correction_url = sketch_correction_config.get(
@@ -231,14 +223,14 @@ class TheoremForgeStateManager:
         sketch_correction_model = sketch_correction_config.get(
             "model", "gpt-5-chat-latest"
         )
-        sketch_correction_api_key = config.get_api_key(sketch_correction_config)
+        sketch_correction_api_key = self.config.get_api_key(sketch_correction_config)
         sketch_correction_sampling = sketch_correction_config.get("sampling_params", {})
 
         shallow_solve_url = shallow_solve_config.get(
             "base_url", "https://api.openai-proxy.org/v1"
         )
         shallow_solve_model = shallow_solve_config.get("model", "gpt-5-chat-latest")
-        shallow_solve_api_key = config.get_api_key(shallow_solve_config)
+        shallow_solve_api_key = self.config.get_api_key(shallow_solve_config)
         shallow_solve_max_rounds = shallow_solve_config.get("max_rounds", 5)
         shallow_solve_sampling = shallow_solve_config.get("sampling_params", {})
 
@@ -246,12 +238,12 @@ class TheoremForgeStateManager:
             "base_url", "https://api.openai-proxy.org/v1"
         )
         informal_model = informal_config.get("model", "gpt-5-chat-latest")
-        informal_api_key = config.get_api_key(informal_config)
+        informal_api_key = self.config.get_api_key(informal_config)
         informal_sampling = informal_config.get("sampling_params", {})
 
         sketch_url = sketch_config.get("base_url", "https://api.openai-proxy.org/v1")
         sketch_model = sketch_config.get("model", "gpt-5-chat-latest")
-        sketch_api_key = config.get_api_key(sketch_config)
+        sketch_api_key = self.config.get_api_key(sketch_config)
         sketch_sampling = sketch_config.get("sampling_params", {})
 
         subgoal_extraction_url = subgoal_extraction_config.get(
@@ -260,7 +252,7 @@ class TheoremForgeStateManager:
         subgoal_extraction_model = subgoal_extraction_config.get(
             "model", "gpt-5-chat-latest"
         )
-        subgoal_extraction_api_key = config.get_api_key(subgoal_extraction_config)
+        subgoal_extraction_api_key = self.config.get_api_key(subgoal_extraction_config)
         subgoal_extraction_sampling = subgoal_extraction_config.get(
             "sampling_params", {}
         )
@@ -269,14 +261,14 @@ class TheoremForgeStateManager:
             "base_url", "https://api.openai-proxy.org/v1"
         )
         retrieval_model = retrieval_config.get("model", "gpt-5-mini")
-        retrieval_api_key = config.get_api_key(retrieval_config)
+        retrieval_api_key = self.config.get_api_key(retrieval_config)
         retrieval_sampling = retrieval_config.get("sampling_params", {})
 
         assembly_url = assembly_config.get(
             "base_url", "https://api.openai-proxy.org/v1"
         )
         assembly_model = assembly_config.get("model", "gpt-5-chat-latest")
-        assembly_api_key = config.get_api_key(assembly_config)
+        assembly_api_key = self.config.get_api_key(assembly_config)
         assembly_sampling = assembly_config.get("sampling_params", {})
 
         assembly_correction_url = assembly_correction_config.get(
@@ -285,7 +277,9 @@ class TheoremForgeStateManager:
         assembly_correction_model = assembly_correction_config.get(
             "model", "gpt-5-chat-latest"
         )
-        assembly_correction_api_key = config.get_api_key(assembly_correction_config)
+        assembly_correction_api_key = self.config.get_api_key(
+            assembly_correction_config
+        )
         assembly_correction_sampling = assembly_correction_config.get(
             "sampling_params", {}
         )
@@ -294,7 +288,7 @@ class TheoremForgeStateManager:
             "base_url", "https://api.openai-proxy.org/v1"
         )
         statement_norm_model = statement_norm_config.get("model", "gpt-5-chat-latest")
-        statement_norm_api_key = config.get_api_key(statement_norm_config)
+        statement_norm_api_key = self.config.get_api_key(statement_norm_config)
         statement_norm_sampling = statement_norm_config.get("sampling_params", {})
 
         autoformalization_url = autoformalization_config.get(
@@ -303,14 +297,14 @@ class TheoremForgeStateManager:
         autoformalization_model = autoformalization_config.get(
             "model", "model/StepFun-Formalizer-7B"
         )
-        autoformalization_api_key = config.get_api_key(autoformalization_config)
+        autoformalization_api_key = self.config.get_api_key(autoformalization_config)
         autoformalization_sampling = autoformalization_config.get("sampling_params", {})
 
         semantic_check_url = semantic_check_config.get(
             "base_url", "https://api.openai-proxy.org/v1"
         )
         semantic_check_model = semantic_check_config.get("model", "gpt-5-chat-latest")
-        semantic_check_api_key = config.get_api_key(semantic_check_config)
+        semantic_check_api_key = self.config.get_api_key(semantic_check_config)
         semantic_check_sampling = semantic_check_config.get("sampling_params", {})
 
         statement_correction_url = statement_correction_config.get(
@@ -319,19 +313,10 @@ class TheoremForgeStateManager:
         statement_correction_model = statement_correction_config.get(
             "model", "gpt-5-chat-latest"
         )
-        statement_correction_api_key = config.get_api_key(statement_correction_config)
+        statement_correction_api_key = self.config.get_api_key(
+            statement_correction_config
+        )
         statement_correction_sampling = statement_correction_config.get(
-            "sampling_params", {}
-        )
-
-        statement_refinement_url = statement_refinement_config.get(
-            "base_url", "https://api.openai-proxy.org/v1"
-        )
-        statement_refinement_model = statement_refinement_config.get(
-            "model", "gpt-5-chat-latest"
-        )
-        statement_refinement_api_key = config.get_api_key(statement_refinement_config)
-        statement_refinement_sampling = statement_refinement_config.get(
             "sampling_params", {}
         )
 
@@ -341,7 +326,7 @@ class TheoremForgeStateManager:
         formalization_selection_model = formalization_selection_config.get(
             "model", "gpt-5-chat-latest"
         )
-        formalization_selection_api_key = config.get_api_key(
+        formalization_selection_api_key = self.config.get_api_key(
             formalization_selection_config
         )
         formalization_selection_sampling = formalization_selection_config.get(
@@ -506,17 +491,6 @@ class TheoremForgeStateManager:
             for _ in range(self.max_workers)
         ]
 
-        self.context.agents["statement_refinement_agent"] = [
-            StatementRefinementAgent(
-                context=self.context,
-                base_url=statement_refinement_url,
-                api_key=statement_refinement_api_key,
-                model_name=statement_refinement_model,
-                sampling_params=statement_refinement_sampling,
-            )
-            for _ in range(self.max_workers)
-        ]
-
         self.context.agents["formalization_selection_agent"] = [
             FormalizationSelectionAgent(
                 context=self.context,
@@ -561,9 +535,9 @@ class TheoremForgeStateManager:
 
         logger.info("Starting TheoremForge Manager...")
 
-        # Connect to shared MongoDB database
+        # Connect to shared database
         await self.context.db.connect()
-        logger.info("MongoDB database connected")
+        logger.info("Database connected")
 
         # Start all agent tasks
         for agent_name, agents in self.context.agents.items():
@@ -618,7 +592,7 @@ class TheoremForgeStateManager:
                 logger.warning("Some agent tasks did not complete within timeout")
             except Exception as e:
                 logger.error(f"Error during shutdown: {e}")
-        
+
         # Clear all cancellation events
         async with self.context.cancellation_lock:
             self.context.cancellation_events.clear()
@@ -736,14 +710,14 @@ class TheoremForgeStateManager:
             id=theorem_id,
             formal_statement=formal_statement,
             header=header
-            or config.lean_server.get("LeanServerHeader", "import Mathlib\n"),
+            or self.config.lean_server.get("LeanServerHeader", "import Mathlib\n"),
             depth=0,
             success=False,
             metadata=metadata or {},
         )
 
         # Submit to theorem retrieval agent (entry point)
-        await self.context.shared_queues["theorem_retrieval_agent"].put(new_state)
+        await self.context.shared_queues["prover_agent"].put(new_state)
 
         # Track this as a root state
         async with self.context.root_state_ids_lock:
@@ -782,7 +756,7 @@ class TheoremForgeStateManager:
             id=statement_id,
             informal_statement=informal_statement,
             header=header
-            or config.lean_server.get("LeanServerHeader", "import Mathlib\n"),
+            or self.config.lean_server.get("LeanServerHeader", "import Mathlib\n"),
             depth=0,
             success=False,
             metadata=metadata or {},

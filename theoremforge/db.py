@@ -1,426 +1,523 @@
 """
-MongoDB client for TheoremForge.
+SQLite client for TheoremForge.
 
-This module provides an async MongoDB client to replace Prisma.
+This module provides an async SQLite client with two data models:
+- TheoremForgeState: Stores theorem proving states
+- AgentTrace: Stores agent execution traces
 """
 
 import os
+import json
+import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pathlib import Path
+import aiosqlite
 from loguru import logger
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-class MongoDBClient:
-    """Async MongoDB client for TheoremForge."""
+class SQLiteClient:
+    """Async SQLite client for TheoremForge."""
 
-    def __init__(self, connection_url: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None):
         """
-        Initialize MongoDB client.
+        Initialize SQLite client.
 
         Args:
-            connection_url: MongoDB connection URL. If not provided, uses DATABASE_URL env var.
+            db_path: Path to SQLite database file. If not provided, uses DATABASE_PATH env var
+                    or defaults to ./theoremforge.db
         """
-        self.connection_url = connection_url or os.getenv(
-            "DATABASE_URL",
-            "mongodb://admin:password@localhost:27017/theoremforge?authSource=admin",
-        )
-        self.client: Optional[AsyncIOMotorClient] = None
-        self.db: Optional[AsyncIOMotorDatabase] = None
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = os.getenv("DATABASE_PATH", "./theoremforge.db")
+
+        # Ensure directory exists
+        db_file = Path(self.db_path)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+
+        self.connection: Optional[aiosqlite.Connection] = None
         self._connected = False
 
-        # Cache collection instances to avoid recreation
-        self._collections: Dict[str, Any] = {}
-
     async def connect(self):
-        """Connect to MongoDB."""
+        """Connect to SQLite database and create tables."""
         if self._connected:
-            logger.warning("MongoDB client already connected")
+            logger.warning("SQLite client already connected")
             return
 
         try:
-            self.client = AsyncIOMotorClient(self.connection_url)
-            # Extract database name from URL or use default
-            db_name = "theoremforge"
-            if "?" in self.connection_url:
-                path = self.connection_url.split("?")[0].split("/")[-1]
-                if path:
-                    db_name = path
+            self.connection = await aiosqlite.connect(self.db_path)
+            # Enable foreign keys
+            await self.connection.execute("PRAGMA foreign_keys = ON")
+            # Set WAL mode for better concurrency
+            await self.connection.execute("PRAGMA journal_mode = WAL")
 
-            self.db = self.client[db_name]
+            # Create tables
+            await self._create_tables()
 
-            # Test connection
-            await self.client.admin.command("ping")
             self._connected = True
-            logger.info(f"Connected to MongoDB database: {db_name}")
+            logger.info(f"Connected to SQLite database: {self.db_path}")
 
         except Exception as e:
-            logger.error(f"Failed to connect to MongoDB: {e}")
+            logger.error(f"Failed to connect to SQLite: {e}")
             raise
 
+    async def _create_tables(self):
+        """Create database tables."""
+        async with self.connection.cursor() as cursor:
+            # Create TheoremForgeState table
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS theorem_forge_states (
+                    id TEXT PRIMARY KEY,
+                    informal_statement TEXT,
+                    formal_statement TEXT,
+                    formal_proof TEXT,
+                    subgoals TEXT,
+                    parent_id TEXT,
+                    success INTEGER DEFAULT 0,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            await cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_states_parent_id ON theorem_forge_states(parent_id)"
+            )
+            await cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_states_success ON theorem_forge_states(success)"
+            )
+
+            # Create AgentTrace table
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_traces (
+                    id TEXT PRIMARY KEY,
+                    state_id TEXT,
+                    prompt TEXT,
+                    response TEXT,
+                    input_token INTEGER DEFAULT 0,
+                    output_token INTEGER DEFAULT 0,
+                    agent_name TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
+            await cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_traces_state_id ON agent_traces(state_id)"
+            )
+            await cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_traces_agent_name ON agent_traces(agent_name)"
+            )
+
+            await self.connection.commit()
+
     async def disconnect(self):
-        """Disconnect from MongoDB."""
+        """Disconnect from SQLite database."""
         if not self._connected:
             return
 
-        if self.client:
-            self.client.close()
+        if self.connection:
+            await self.connection.close()
             self._connected = False
-            logger.info("Disconnected from MongoDB")
+            logger.info("Disconnected from SQLite")
 
-    @property
-    def theoremforgestate(self):
-        """Access TheoremForgeState collection."""
-        if "theoremforgestate" not in self._collections:
-            self._collections["theoremforgestate"] = TheoremForgeStateCollection(
-                self.db
-            )
-        return self._collections["theoremforgestate"]
+    async def _ensure_connected(self):
+        """Ensure database is connected."""
+        if not self._connected:
+            await self.connect()
 
-    @property
-    def provertrace(self):
-        """Access ProverTrace collection."""
-        if "provertrace" not in self._collections:
-            self._collections["provertrace"] = ProverTraceCollection(self.db)
-        return self._collections["provertrace"]
+    # ==================== TheoremForgeState Operations ====================
 
-    @property
-    def selfcorrectiontrace(self):
-        """Access SelfCorrectionTrace collection (deprecated)."""
-        if "selfcorrectiontrace" not in self._collections:
-            self._collections["selfcorrectiontrace"] = SelfCorrectionTraceCollection(
-                self.db
-            )
-        return self._collections["selfcorrectiontrace"]
+    async def create_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new TheoremForgeState.
 
-    @property
-    def proofcorrectiontrace(self):
-        """Access ProofCorrectionTrace collection."""
-        if "proofcorrectiontrace" not in self._collections:
-            self._collections["proofcorrectiontrace"] = ProofCorrectionTraceCollection(
-                self.db
-            )
-        return self._collections["proofcorrectiontrace"]
+        Args:
+            state: Dictionary containing state data with keys:
+                - id (optional, will generate if not provided)
+                - informal_statement
+                - formal_statement
+                - formal_proof
+                - subgoals (list, will be JSON serialized)
+                - parent_id
+                - success (bool)
 
-    @property
-    def sketchcorrectiontrace(self):
-        """Access SketchCorrectionTrace collection."""
-        if "sketchcorrectiontrace" not in self._collections:
-            self._collections["sketchcorrectiontrace"] = SketchCorrectionTraceCollection(
-                self.db
-            )
-        return self._collections["sketchcorrectiontrace"]
+        Returns:
+            Created state dictionary
+        """
+        await self._ensure_connected()
 
-    @property
-    def correctnesschecktrace(self):
-        """Access CorrectnessCheckTrace collection."""
-        if "correctnesschecktrace" not in self._collections:
-            self._collections["correctnesschecktrace"] = CorrectnessCheckTraceCollection(
-                self.db
-            )
-        return self._collections["correctnesschecktrace"]
+        # Generate ID if not provided
+        state_id = state.get("id") or str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
 
-    @property
-    def shallowsolvetrace(self):
-        """Access ShallowSolveTrace collection."""
-        if "shallowsolvetrace" not in self._collections:
-            self._collections["shallowsolvetrace"] = ShallowSolveTraceCollection(
-                self.db
-            )
-        return self._collections["shallowsolvetrace"]
+        # Serialize subgoals list to JSON
+        subgoals = state.get("subgoals")
+        subgoals_json = json.dumps(subgoals) if subgoals is not None else None
 
-    @property
-    def theoremretrievaltrace(self):
-        """Access TheoremRetrievalTrace collection."""
-        if "theoremretrievaltrace" not in self._collections:
-            self._collections["theoremretrievaltrace"] = (
-                TheoremRetrievalTraceCollection(self.db)
-            )
-        return self._collections["theoremretrievaltrace"]
+        # Convert success bool to integer
+        success = 1 if state.get("success", False) else 0
 
-    @property
-    def informalprooftrace(self):
-        """Access InformalProofTrace collection."""
-        if "informalprooftrace" not in self._collections:
-            self._collections["informalprooftrace"] = InformalProofTraceCollection(
-                self.db
-            )
-        return self._collections["informalprooftrace"]
-
-    @property
-    def proofsketchtrace(self):
-        """Access ProofSketchTrace collection."""
-        if "proofsketchtrace" not in self._collections:
-            self._collections["proofsketchtrace"] = ProofSketchTraceCollection(self.db)
-        return self._collections["proofsketchtrace"]
-
-    @property
-    def proofassemblytrace(self):
-        """Access ProofAssemblyTrace collection."""
-        if "proofassemblytrace" not in self._collections:
-            self._collections["proofassemblytrace"] = ProofAssemblyTraceCollection(
-                self.db
-            )
-        return self._collections["proofassemblytrace"]
-
-    @property
-    def definitionretrievaltrace(self):
-        """Access DefinitionRetrievalTrace collection."""
-        if "definitionretrievaltrace" not in self._collections:
-            self._collections["definitionretrievaltrace"] = (
-                DefinitionRetrievalTraceCollection(self.db)
-            )
-        return self._collections["definitionretrievaltrace"]
-
-    @property
-    def statementnormalizationtrace(self):
-        """Access StatementNormalizationTrace collection."""
-        if "statementnormalizationtrace" not in self._collections:
-            self._collections["statementnormalizationtrace"] = (
-                StatementNormalizationTraceCollection(self.db)
-            )
-        return self._collections["statementnormalizationtrace"]
-
-    @property
-    def autoformalizationtrace(self):
-        """Access AutoformalizationTrace collection."""
-        if "autoformalizationtrace" not in self._collections:
-            self._collections["autoformalizationtrace"] = (
-                AutoformalizationTraceCollection(self.db)
-            )
-        return self._collections["autoformalizationtrace"]
-
-    @property
-    def semanticchecktrace(self):
-        """Access SemanticCheckTrace collection."""
-        if "semanticchecktrace" not in self._collections:
-            self._collections["semanticchecktrace"] = SemanticCheckTraceCollection(self.db)
-        return self._collections["semanticchecktrace"]
-
-    @property
-    def statementcorrectiontrace(self):
-        """Access StatementCorrectionTrace collection."""
-        if "statementcorrectiontrace" not in self._collections:
-            self._collections["statementcorrectiontrace"] = StatementCorrectionTraceCollection(self.db)
-        return self._collections["statementcorrectiontrace"]
-
-    @property
-    def statementrefinementtrace(self):
-        """Access StatementRefinementTrace collection."""
-        if "statementrefinementtrace" not in self._collections:
-            self._collections["statementrefinementtrace"] = StatementRefinementTraceCollection(self.db)
-        return self._collections["statementrefinementtrace"]
-
-    @property
-    def formalizationselectiontrace(self):
-        """Access FormalizationSelectionTrace collection."""
-        if "formalizationselectiontrace" not in self._collections:
-            self._collections["formalizationselectiontrace"] = FormalizationSelectionTraceCollection(self.db)
-        return self._collections["formalizationselectiontrace"]
-
-    @property
-    def subgoalextractiontrace(self):
-        """Access SubgoalExtractionTrace collection."""
-        if "subgoalextractiontrace" not in self._collections:
-            self._collections["subgoalextractiontrace"] = SubgoalExtractionTraceCollection(self.db)
-        return self._collections["subgoalextractiontrace"]
-
-    @property
-    def assemblycorrectiontrace(self):
-        """Access AssemblyCorrectionTrace collection."""
-        if "assemblycorrectiontrace" not in self._collections:
-            self._collections["assemblycorrectiontrace"] = AssemblyCorrectionTraceCollection(self.db)
-        return self._collections["assemblycorrectiontrace"]
-
-
-class BaseCollection:
-    """Base class for MongoDB collections."""
-
-    def __init__(self, db: AsyncIOMotorDatabase, collection_name: str):
-        self.collection = db[collection_name]
-
-    async def create(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new document."""
-        # Make a copy to avoid mutating the input
-        doc_data = data.copy()
-
-        # Add timestamps
-        now = datetime.utcnow()
-        doc_data["createdAt"] = now
-        doc_data["updatedAt"] = now
-
-        result = await self.collection.insert_one(doc_data)
-        doc_data["_id"] = str(result.inserted_id)
-
-        # Log only the ID, not the entire document (which can be huge)
-        logger.debug(
-            f"Created document with id={doc_data.get('id', doc_data['_id'])} in {self.collection.name}"
+        sql = """
+            INSERT INTO theorem_forge_states 
+            (id, informal_statement, formal_statement, formal_proof, subgoals, parent_id, success, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        values = (
+            state_id,
+            state.get("informal_statement"),
+            state.get("formal_statement"),
+            state.get("formal_proof"),
+            subgoals_json,
+            state.get("parent_id"),
+            success,
+            now,
+            now,
         )
 
-        return doc_data
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, values)
+            await self.connection.commit()
 
-    async def find_one(self, filter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Find a single document."""
-        return await self.collection.find_one(filter)
+        logger.debug(f"Created TheoremForgeState with id={state_id}")
 
-    async def find_many(
-        self, filter: Dict[str, Any] = None, limit: int = 0
+        return {
+            "id": state_id,
+            "informal_statement": state.get("informal_statement"),
+            "formal_statement": state.get("formal_statement"),
+            "formal_proof": state.get("formal_proof"),
+            "subgoals": subgoals,
+            "parent_id": state.get("parent_id"),
+            "success": state.get("success", False),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    async def get_state(self, state_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a TheoremForgeState by ID.
+
+        Args:
+            state_id: State ID
+
+        Returns:
+            State dictionary or None if not found
+        """
+        await self._ensure_connected()
+
+        sql = "SELECT * FROM theorem_forge_states WHERE id = ?"
+
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, (state_id,))
+            row = await cursor.fetchone()
+
+            if row is None:
+                return None
+
+            columns = [desc[0] for desc in cursor.description]
+            result = dict(zip(columns, row))
+
+            # Deserialize subgoals JSON
+            if result.get("subgoals"):
+                try:
+                    result["subgoals"] = json.loads(result["subgoals"])
+                except json.JSONDecodeError:
+                    result["subgoals"] = None
+
+            # Convert success integer to bool
+            result["success"] = bool(result.get("success", 0))
+
+            return result
+
+    async def update_state(self, state_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update a TheoremForgeState.
+
+        Args:
+            state_id: State ID
+            updates: Dictionary of fields to update
+
+        Returns:
+            True if updated, False if not found
+        """
+        await self._ensure_connected()
+
+        # Build SET clause dynamically
+        set_parts = []
+        values = []
+
+        for key, value in updates.items():
+            if key == "id":
+                continue  # Don't update ID
+            if key == "subgoals":
+                set_parts.append("subgoals = ?")
+                values.append(json.dumps(value) if value is not None else None)
+            elif key == "success":
+                set_parts.append("success = ?")
+                values.append(1 if value else 0)
+            elif key in ("informal_statement", "formal_statement", "formal_proof", "parent_id"):
+                set_parts.append(f"{key} = ?")
+                values.append(value)
+
+        if not set_parts:
+            return False
+
+        # Add updated_at
+        set_parts.append("updated_at = ?")
+        values.append(datetime.utcnow().isoformat())
+        values.append(state_id)
+
+        sql = f"UPDATE theorem_forge_states SET {', '.join(set_parts)} WHERE id = ?"
+
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, values)
+            await self.connection.commit()
+            return cursor.rowcount > 0
+
+    async def delete_state(self, state_id: str) -> bool:
+        """
+        Delete a TheoremForgeState.
+
+        Args:
+            state_id: State ID
+
+        Returns:
+            True if deleted, False if not found
+        """
+        await self._ensure_connected()
+
+        sql = "DELETE FROM theorem_forge_states WHERE id = ?"
+
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, (state_id,))
+            # Delete the traces of the state
+            await self.delete_traces_by_state(state_id)
+            await self.connection.commit()
+            return cursor.rowcount > 0
+
+    async def find_states(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: int = 0
     ) -> List[Dict[str, Any]]:
-        """Find multiple documents."""
-        cursor = self.collection.find(filter or {})
+        """
+        Find TheoremForgeStates matching filter.
+
+        Args:
+            filter: Filter dictionary (e.g., {"success": True, "parent_id": "xxx"})
+            limit: Maximum number of results (0 = no limit)
+
+        Returns:
+            List of state dictionaries
+        """
+        await self._ensure_connected()
+
+        sql = "SELECT * FROM theorem_forge_states"
+        values = []
+
+        if filter:
+            conditions = []
+            for key, value in filter.items():
+                if key == "success":
+                    conditions.append("success = ?")
+                    values.append(1 if value else 0)
+                elif key in ("id", "informal_statement", "formal_statement", "formal_proof", "parent_id"):
+                    conditions.append(f"{key} = ?")
+                    values.append(value)
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+
         if limit > 0:
-            cursor = cursor.limit(limit)
-        return await cursor.to_list(length=None)
+            sql += f" LIMIT {limit}"
 
-    async def update_one(self, filter: Dict[str, Any], update: Dict[str, Any]) -> bool:
-        """Update a single document."""
-        update["updatedAt"] = datetime.utcnow()
-        result = await self.collection.update_one(filter, {"$set": update})
-        return result.modified_count > 0
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, values)
+            rows = await cursor.fetchall()
 
-    async def delete_one(self, filter: Dict[str, Any]) -> bool:
-        """Delete a single document."""
-        result = await self.collection.delete_one(filter)
-        return result.deleted_count > 0
+            columns = [desc[0] for desc in cursor.description]
+            results = []
 
+            for row in rows:
+                result = dict(zip(columns, row))
+                # Deserialize subgoals JSON
+                if result.get("subgoals"):
+                    try:
+                        result["subgoals"] = json.loads(result["subgoals"])
+                    except json.JSONDecodeError:
+                        result["subgoals"] = None
+                # Convert success to bool
+                result["success"] = bool(result.get("success", 0))
+                results.append(result)
 
-class TheoremForgeStateCollection(BaseCollection):
-    """Collection for TheoremForge states."""
+            return results
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "theorem_forge_states")
+    # ==================== AgentTrace Operations ====================
 
+    async def create_trace(self, trace: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new AgentTrace.
 
-class ProverTraceCollection(BaseCollection):
-    """Collection for prover traces."""
+        Args:
+            trace: Dictionary containing trace data with keys:
+                - id (optional, will generate if not provided)
+                - state_id
+                - prompt
+                - response (list of strings)
+                - input_token
+                - output_token
+                - agent_name
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "prover_traces")
+        Returns:
+            Created trace dictionary
+        """
+        await self._ensure_connected()
 
+        # Generate ID if not provided
+        trace_id = trace.get("id") or str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
 
-class SelfCorrectionTraceCollection(BaseCollection):
-    """Collection for self-correction traces."""
+        response_json = json.dumps(trace.get("response"), ensure_ascii=False)
+        sql = """
+            INSERT INTO agent_traces 
+            (id, state_id, prompt, response, input_token, output_token, agent_name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        values = (
+            trace_id,
+            trace.get("state_id"),
+            trace.get("prompt"),
+            response_json,
+            trace.get("input_token", 0),
+            trace.get("output_token", 0),
+            trace.get("agent_name"),
+            now,
+            now,
+        )
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "self_correction_traces")
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, values)
+            await self.connection.commit()
 
+        logger.debug(f"Created AgentTrace with id={trace_id}")
 
-class TheoremRetrievalTraceCollection(BaseCollection):
-    """Collection for theorem retrieval traces."""
+        return {
+            "id": trace_id,
+            "state_id": trace.get("state_id"),
+            "prompt": trace.get("prompt"),
+            "response": response_json,
+            "input_token": trace.get("input_token", 0),
+            "output_token": trace.get("output_token", 0),
+            "agent_name": trace.get("agent_name"),
+            "created_at": now,
+            "updated_at": now,
+        }
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "theorem_retrieval_traces")
+    async def get_trace(self, trace_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get an AgentTrace by ID.
 
+        Args:
+            trace_id: Trace ID
 
-class InformalProofTraceCollection(BaseCollection):
-    """Collection for informal proof traces."""
+        Returns:
+            Trace dictionary or None if not found
+        """
+        await self._ensure_connected()
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "informal_proof_traces")
+        sql = "SELECT * FROM agent_traces WHERE id = ?"
 
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, (trace_id,))
+            row = await cursor.fetchone()
 
-class ProofSketchTraceCollection(BaseCollection):
-    """Collection for proof sketch traces."""
+            if row is None:
+                return None
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "proof_sketch_traces")
+            columns = [desc[0] for desc in cursor.description]
+            result = dict(zip(columns, row))
+            result["response"] = json.loads(result["response"])
+            return result
 
+    async def find_traces(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        limit: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Find AgentTraces matching filter.
 
-class ProofAssemblyTraceCollection(BaseCollection):
-    """Collection for proof assembly traces."""
+        Args:
+            filter: Filter dictionary (e.g., {"state_id": "xxx", "agent_name": "yyy"})
+            limit: Maximum number of results (0 = no limit)
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "proof_assembly_traces")
+        Returns:
+            List of trace dictionaries
+        """
+        await self._ensure_connected()
 
+        sql = "SELECT * FROM agent_traces"
+        values = []
 
-class DefinitionRetrievalTraceCollection(BaseCollection):
-    """Collection for definition retrieval traces."""
+        if filter:
+            conditions = []
+            for key, value in filter.items():
+                if key in ("id", "state_id", "agent_name"):
+                    conditions.append(f"{key} = ?")
+                    values.append(value)
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "definition_retrieval_traces")
+        if limit > 0:
+            sql += f" LIMIT {limit}"
 
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, values)
+            rows = await cursor.fetchall()
 
-class StatementNormalizationTraceCollection(BaseCollection):
-    """Collection for statement normalization traces."""
+            columns = [desc[0] for desc in cursor.description]
+            results = []
+            for row in rows:
+                result = dict(zip(columns, row))
+                result["response"] = json.loads(result["response"])
+                results.append(result)
+            return results
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "statement_normalization_traces")
+    async def delete_trace(self, trace_id: str) -> bool:
+        """
+        Delete an AgentTrace.
 
+        Args:
+            trace_id: Trace ID
 
-class AutoformalizationTraceCollection(BaseCollection):
-    """Collection for autoformalization traces."""
+        Returns:
+            True if deleted, False if not found
+        """
+        await self._ensure_connected()
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "autoformalization_traces")
+        sql = "DELETE FROM agent_traces WHERE id = ?"
 
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, (trace_id,))
+            await self.connection.commit()
+            return cursor.rowcount > 0
 
-class SemanticCheckTraceCollection(BaseCollection):
-    """Collection for semantic check traces."""
+    async def delete_traces_by_state(self, state_id: str) -> int:
+        """
+        Delete all AgentTraces for a given state.
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "semantic_check_traces")
+        Args:
+            state_id: State ID
 
+        Returns:
+            Number of deleted traces
+        """
+        await self._ensure_connected()
 
-class ProofCorrectionTraceCollection(BaseCollection):
-    """Collection for proof correction traces."""
+        sql = "DELETE FROM agent_traces WHERE state_id = ?"
 
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "proof_correction_traces")
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(sql, (state_id,))
+            await self.connection.commit()
+            return cursor.rowcount
 
-
-class SketchCorrectionTraceCollection(BaseCollection):
-    """Collection for sketch correction traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "sketch_correction_traces")
-
-
-class CorrectnessCheckTraceCollection(BaseCollection):
-    """Collection for correctness check traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "correctness_check_traces")
-
-
-class ShallowSolveTraceCollection(BaseCollection):
-    """Collection for shallow solve traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "shallow_solve_traces")
-
-
-class StatementCorrectionTraceCollection(BaseCollection):
-    """Collection for statement correction traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "statement_correction_traces")
-
-
-class StatementRefinementTraceCollection(BaseCollection):
-    """Collection for statement refinement traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "statement_refinement_traces")
-
-
-class FormalizationSelectionTraceCollection(BaseCollection):
-    """Collection for formalization selection traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "formalization_selection_traces")
-
-
-class SubgoalExtractionTraceCollection(BaseCollection):
-    """Collection for subgoal extraction traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "subgoal_extraction_traces")
-
-class AssemblyCorrectionTraceCollection(BaseCollection):
-    """Collection for assembly correction traces."""
-
-    def __init__(self, db: AsyncIOMotorDatabase):
-        super().__init__(db, "assembly_correction_traces")

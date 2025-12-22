@@ -2,18 +2,23 @@ from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
 
+from theoremforge.db import SQLiteClient
 from theoremforge.lean_server.client import RemoteVerifier
 
 
 class TheoremForgeContext:
-    def __init__(self, verifier_url: str) -> None:
-        self.verifier = RemoteVerifier(verifier_url)
+    def __init__(self, verifier_config) -> None:
+        self.verifier = RemoteVerifier(
+            f"http://localhost:{verifier_config.get('LeanServerPort')}"
+        )
         self.agents = dict()
         self.black_list = set()
         self.statement_record = dict()
         self.proof_record = dict()
         self.root_state_ids = set()  # Track root-level states (manually submitted)
-        self.db = None  # Shared MongoDB client, initialized by manager
+        self.db: SQLiteClient | None = (
+            None  # Shared MongoDB client, initialized by manager
+        )
 
         # Shared task queues per agent type (for work-stealing optimization)
         self.shared_queues = dict()  # agent_name -> asyncio.Queue[TheoremForgeState]

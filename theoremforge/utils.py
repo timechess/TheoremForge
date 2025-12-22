@@ -1,10 +1,16 @@
 import re
 import asyncio
 from typing import Optional, List
-
-from openai import AsyncOpenAI
+import json
+import logging
+from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, RateLimitError
 from openai.types.chat.chat_completion import ChatCompletion
+from google.genai import Client, types
+from google.genai.errors import APIError
 from theoremforge.state import TheoremForgeState, TheoremForgeContext
+from lean_explore.local.service import APISearchResultItem
+
+logger = logging.getLogger(__name__)
 
 
 def extract_lean_code(text: str) -> str:
@@ -47,12 +53,8 @@ def remove_comments(text):  # remove comments
     return cleaned_text.strip()
 
 
-def payload_to_string(payload: dict) -> str:
-    return f"""full_name: {payload["name"]}
-type: {payload["type"]}
-informal_name: {payload["informal_name"]}
-informal_description: {payload["informal_description"]}
-"""
+def format_search_results(result: APISearchResultItem) -> str:
+    return f"name: {result.primary_declaration.lean_name}\nlean_code: {result.display_statement_text}\ninformal_description: {result.informal_description}\ndocstring: {result.docstring}"
 
 
 def get_error_str(
@@ -139,41 +141,130 @@ def get_error_str(
 
 class CancellationError(Exception):
     """Raised when an operation is cancelled via cancellation event."""
+
     pass
+
+
+def convert_openai_messages_to_genai(messages):
+    genai_messages = []
+    system_instruction = None
+
+    for msg in messages:
+        role = msg["role"]
+        content = msg["content"]
+
+        if role == "system":
+            # 系统提示放在 system_instruction，不放在 contents 里
+            system_instruction = content
+        else:
+            genai_messages.append(
+                {
+                    "role": "user" if role == "user" else "model",
+                    "parts": [{"text": content}],
+                }
+            )
+
+    return system_instruction, genai_messages
 
 
 async def call_llm(
     state: TheoremForgeState,
-    client: AsyncOpenAI,
+    context: TheoremForgeContext,
+    client: AsyncOpenAI | Client,
     model_name: str,
     prompt: str | List[dict],
     sampling_params: dict,
     agent_name: str,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
 ) -> List[str]:
+    """
+    Call LLM with automatic retry on network errors.
+
+    Args:
+        max_retries: Maximum number of retry attempts (default: 3)
+        base_delay: Initial delay in seconds before first retry (default: 1.0)
+        max_delay: Maximum delay in seconds between retries (default: 60.0)
+    """
     if isinstance(prompt, str):
         prompt = [{"role": "user", "content": prompt}]
-    response: ChatCompletion = await client.chat.completions.create(
-        model=model_name,
-        messages=prompt,
-        **sampling_params,
-    )
 
-    if agent_name in state.token_trace:
-        state.token_trace[agent_name] = {
-            "prompt_tokens": response.usage.prompt_tokens
-            + state.token_trace[agent_name]["prompt_tokens"],
-            "completion_tokens": response.usage.completion_tokens
-            + state.token_trace[agent_name]["completion_tokens"],
-            "total_tokens": response.usage.total_tokens
-            + state.token_trace[agent_name]["total_tokens"],
-        }
-    else:
-        state.token_trace[agent_name] = {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
-    return [choice.message.content for choice in response.choices]
+    last_exception = None
+    for attempt in range(max_retries + 1):
+        try:
+            if isinstance(client, AsyncOpenAI):
+                response: ChatCompletion = await client.chat.completions.create(
+                    model=model_name,
+                    messages=prompt,
+                    **sampling_params,
+                )
+                await context.db.create_trace(
+                    trace={
+                        "state_id": state.id,
+                        "agent_name": agent_name,
+                        "prompt": json.dumps(prompt, ensure_ascii=False),
+                        "response": [
+                            choice.message.content for choice in response.choices
+                        ],
+                        "input_token": response.usage.prompt_tokens,
+                        "output_token": response.usage.completion_tokens,
+                    }
+                )
+                return [choice.message.content for choice in response.choices]
+            elif isinstance(client, Client):
+                _, genai_prompt = convert_openai_messages_to_genai(prompt)
+                response: types.GenerateContentResponse = (
+                    await client.aio.models.generate_content(
+                        model=model_name,
+                        contents=genai_prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=1.0,
+                            thinking_config=types.ThinkingConfig(
+                                thinking_level=sampling_params.get(
+                                    "thinking_level", "low"
+                                ),
+                            ),
+                        ),
+                    )
+                )
+                input_token = response.usage_metadata.prompt_token_count or 0
+                output_token = (response.usage_metadata.candidates_token_count or 0) + (
+                    response.usage_metadata.thoughts_token_count or 0
+                )
+                await context.db.create_trace(
+                    trace={
+                        "state_id": state.id,
+                        "agent_name": agent_name,
+                        "prompt": json.dumps(prompt, ensure_ascii=False),
+                        "response": [response.text],
+                        "input_token": input_token,
+                        "output_token": output_token,
+                    }
+                )
+                return [response.text]
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            RateLimitError,
+            APIError,
+            asyncio.TimeoutError,
+            OSError,
+        ) as e:
+            last_exception = e
+            if attempt < max_retries:
+                # Exponential backoff with jitter
+                delay = min(base_delay * (2**attempt), max_delay)
+                logger.warning(
+                    f"[{agent_name}] LLM call failed (attempt {attempt + 1}/{max_retries + 1}): {type(e).__name__}: {e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(
+                    f"[{agent_name}] LLM call failed after {max_retries + 1} attempts: {type(e).__name__}: {e}"
+                )
+                raise last_exception
 
 
 async def call_llm_interruptible(
@@ -184,10 +275,13 @@ async def call_llm_interruptible(
     prompt: str | List[dict],
     sampling_params: dict,
     agent_name: str,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0,
 ) -> List[str]:
     """
     Call LLM with support for cancellation via context.cancellation_events.
-    
+
     Args:
         state: The state being processed
         context: TheoremForgeContext with cancellation events
@@ -196,10 +290,13 @@ async def call_llm_interruptible(
         prompt: Prompt or message list
         sampling_params: Sampling parameters
         agent_name: Name of the calling agent
-        
+        max_retries: Maximum number of retry attempts (default: 3)
+        base_delay: Initial delay in seconds before first retry (default: 1.0)
+        max_delay: Maximum delay in seconds between retries (default: 60.0)
+
     Returns:
         List of generated responses
-        
+
     Raises:
         CancellationError: If the state is cancelled during execution
     """
@@ -208,26 +305,36 @@ async def call_llm_interruptible(
         cancellation_event = context.cancellation_events.get(state.id)
         if cancellation_event and cancellation_event.is_set():
             raise CancellationError(f"State {state.id} was cancelled before LLM call")
-    
+
     # Create the LLM call task
     llm_task = asyncio.create_task(
-        call_llm(state, client, model_name, prompt, sampling_params, agent_name)
+        call_llm(
+            state,
+            context,
+            client,
+            model_name,
+            prompt,
+            sampling_params,
+            agent_name,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            max_delay=max_delay,
+        )
     )
-    
+
     # If there's a cancellation event, wait for either completion or cancellation
     async with context.cancellation_lock:
         cancellation_event = context.cancellation_events.get(state.id)
-    
+
     if cancellation_event:
         # Create cancellation wait task
         cancel_wait_task = asyncio.create_task(cancellation_event.wait())
-        
+
         # Wait for either the LLM call or cancellation
         done, pending = await asyncio.wait(
-            [llm_task, cancel_wait_task],
-            return_when=asyncio.FIRST_COMPLETED
+            [llm_task, cancel_wait_task], return_when=asyncio.FIRST_COMPLETED
         )
-        
+
         # Cancel all pending tasks to avoid "task destroyed but pending" warnings
         for task in pending:
             task.cancel()
@@ -235,16 +342,16 @@ async def call_llm_interruptible(
                 await task
             except asyncio.CancelledError:
                 pass
-        
+
         # If cancellation happened first, raise cancellation error
         if cancellation_event.is_set():
             raise CancellationError(f"State {state.id} was cancelled during LLM call")
-        
+
         # Otherwise, return the LLM result (from done tasks)
         for task in done:
             if task == llm_task:
                 return task.result()
-        
+
         # Fallback - should not reach here
         return await llm_task
     else:

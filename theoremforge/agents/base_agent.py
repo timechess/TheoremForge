@@ -2,7 +2,8 @@ from theoremforge.state import TheoremForgeState, TheoremForgeContext
 from abc import abstractmethod
 import asyncio
 from loguru import logger
-from theoremforge.db import MongoDBClient
+from theoremforge.db import SQLiteClient
+from theoremforge.utils import CancellationError
 
 
 class BaseAgent:
@@ -15,7 +16,7 @@ class BaseAgent:
             self.context.shared_queues[agent_name] = asyncio.Queue()
 
     @property
-    def db(self) -> MongoDBClient:
+    def db(self) -> SQLiteClient:
         """Access shared database client from context."""
         return self.context.db
     
@@ -24,8 +25,35 @@ class BaseAgent:
         """Access shared task queue for this agent type."""
         return self.context.shared_queues[self.agent_name]
 
-    @abstractmethod
     async def run(self):
+        while True:
+            try:
+                state = await self.task_queue.get()
+                # Check if state should be skipped (blacklisted or cancelled)
+                if await self.should_skip_state(state):
+                    await self.add_state_request("finish_agent", state)
+                    continue
+
+                await self._run(state)
+
+            except CancellationError as e:
+                # State was cancelled during processing
+                logger.info(f"{self.agent_name}: {e}")
+                if "state" in locals():
+                    await self.add_state_request("finish_agent", state)
+            except Exception as e:
+                logger.error(f"{self.agent_name}: Error processing state: {e}")
+                import traceback
+                traceback.print_exc()
+                try:
+                    if "state" in locals():
+                        await self.add_state_request("finish_agent", state)
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+
+    @abstractmethod
+    async def _run(self, state: TheoremForgeState):
         raise NotImplementedError
 
     async def add_state_request(self, agent_name: str, state: TheoremForgeState):

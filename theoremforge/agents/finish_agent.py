@@ -29,32 +29,29 @@ class FinishAgent(BaseAgent):
                     async with self.context.black_list_lock:
                         for sibling_id in state.siblings:
                             self.context.black_list.add(sibling_id)
-                    
+
                     # Trigger cancellation events for siblings to interrupt ongoing work
                     async with self.context.cancellation_lock:
                         for sibling_id in state.siblings:
                             if sibling_id not in self.context.cancellation_events:
-                                self.context.cancellation_events[sibling_id] = asyncio.Event()
+                                self.context.cancellation_events[sibling_id] = (
+                                    asyncio.Event()
+                                )
                             self.context.cancellation_events[sibling_id].set()
                             logger.debug(
                                 f"Triggered cancellation for sibling state {sibling_id}"
                             )
 
-            await self.db.theoremforgestate.create(
-                data={
+            await self.cleanup_cancellation_event(state)
+            await self.context.db.create_state(
+                state={
                     "id": state.id,
-                    "header": state.header,
-                    "informalStatement": state.informal_statement,
-                    "normalizedStatement": state.normalized_statement,
-                    "formalStatement": state.formal_statement,
-                    "formalProof": state.formal_proof,
-                    "informalProof": state.informal_proof,
-                    "proofSketch": state.proof_sketch,
+                    "informal_statement": state.informal_statement,
+                    "formal_statement": state.formal_statement,
+                    "formal_proof": state.formal_proof,
                     "subgoals": state.subgoals,
-                    "depth": state.depth,
-                    "parentId": state.parent_id,
+                    "parent_id": state.parent_id,
                     "success": state.success,
-                    "tokenTrace": state.token_trace,
                 }
             )
             logger.info(f"Saving state {state.id} to database")

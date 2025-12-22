@@ -26,9 +26,3 @@ Instructions:
 
 Output Format:
 Provide your formalization inside ```lean4``` code blocks. Before the code, briefly explain your formalization approach and key design decisions.
-
-Hint:
-1. Check whether the normalized statement contains additional constraints that are not present in the informal statement.
-   (e.g. if the problem says `x / y = 2`, do not add `y ≠ 0` to the formalization.)
-2. Check whether the formalization uses too general definitions that are hard to compute while the informal statement does not require it. (e.g. `Euclidean.dist` in real space, general `Field` instead of `ℚ`, `Filter.Tendsto` instead of ε-δ definition.)
-3. If the problem asks for a solution, the formal statement should use the conditions to derive the solution instead of verifying the solution. (e.g. if the problem is to solve `x ^ 2 - 1 = 0`, the formalization should be `x ^ 2 - 1 = 0 -> x = 1 or x = -1` instead of `x = 1 or x = -1 -> x ^ 2 - 1 = 0`)

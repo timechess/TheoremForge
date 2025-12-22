@@ -15,20 +15,19 @@ class Config:
     _instance = None
     _config: Dict[str, Any] = None
 
-    def __new__(cls):
+    def __new__(cls, config_path: str):
         if cls._instance is None:
             cls._instance = super(Config, cls).__new__(cls)
-            cls._instance._load_config()
+            cls._instance._load_config(config_path)
         return cls._instance
 
-    def _load_config(self):
+    def _load_config(self, config_path: str):
         """Load configuration from config.yaml"""
-        config_path = Path(__file__).parent.parent / "config.yaml"
-        if not config_path.exists():
+        if not Path(config_path).exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
         with open(config_path, "r") as f:
-            self._config = yaml.safe_load(f)
+            self._config = yaml.safe_load(f)   
 
     def get(self, section: str, key: str, default: Any = None) -> Any:
         """
@@ -92,11 +91,6 @@ class Config:
         return self._config.get("StatementCorrectionAgentConfig", {})
 
     @property
-    def statement_refinement_agent(self):
-        """Get Statement Refinement Agent configuration"""
-        return self._config.get("StatementRefinementAgentConfig", {})
-
-    @property
     def formalization_selection_agent(self):
         """Get Formalization Selection Agent configuration"""
         return self._config.get("FormalizationSelectionAgentConfig", {})
@@ -155,7 +149,3 @@ class Config:
     def assembly_correction_agent(self):
         """Get Assembly Correction Agent configuration"""
         return self._config.get("AssemblyCorrectionAgentConfig", {})
-
-
-# Global config instance
-config = Config()

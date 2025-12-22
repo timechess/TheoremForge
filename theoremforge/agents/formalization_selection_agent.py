@@ -2,9 +2,11 @@ from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext
 from loguru import logger
 from openai import AsyncOpenAI
+from google.genai import Client
 import re
 from theoremforge.prompt_manager import prompt_manager
-from theoremforge.utils import call_llm_interruptible, CancellationError
+from theoremforge.utils import call_llm_interruptible
+from theoremforge.state import TheoremForgeState
 
 
 class FormalizationSelectionAgent(BaseAgent):
@@ -17,7 +19,10 @@ class FormalizationSelectionAgent(BaseAgent):
         sampling_params: dict,
     ):
         super().__init__(agent_name="formalization_selection_agent", context=context)
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        if model_name.startswith("gemini-"):
+            self.client = Client(api_key=api_key, http_options={"base_url": base_url}, vertexai=True)
+        else:
+            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=1500)
         self.model_name = model_name
         self.sampling_params = sampling_params
 
@@ -35,137 +40,69 @@ class FormalizationSelectionAgent(BaseAgent):
             return int(match.group(1).strip())
         return None
 
-    async def run(self):
-        while True:
-            try:
-                state = await self.task_queue.get()
-                logger.info(
-                    f"Formalization Selection Agent: Start to process state {state.id}"
-                )
+    async def _run(self, state: TheoremForgeState):
+        # Get aligned formalizations from metadata
+        aligned_formalizations = state.metadata.get("aligned_formalizations", [])
+        # If only one formalization, no need to select
+        if len(aligned_formalizations) == 1:
+            logger.info(
+                f"Formalization Selection Agent: Only one formalization available for state {state.id}, skipping selection"
+            )
+            state.formal_statement = aligned_formalizations[0]
+            await self.add_state_request("theorem_retrieval_agent", state)
+            return
 
-                # Register cancellation event for this state
-                await self.register_cancellation_event(state)
+        logger.info(
+            f"Formalization Selection Agent: Selecting from {len(aligned_formalizations)} aligned formalizations for state {state.id}"
+        )
 
-                # Check if state should be skipped (blacklisted or cancelled)
-                if await self.should_skip_state(state):
-                    await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-                    continue
+        # Generate prompt for formalization selection
+        selection_prompt = prompt_manager.formalization_selection(
+            informal_statement=state.informal_statement,
+            formalizations=aligned_formalizations,
+        )
 
-                if not state.informal_statement:
-                    logger.error(
-                        f"Formalization Selection Agent: Missing informal statement for state {state.id}"
-                    )
-                    await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-                    continue
+        # Get LLM response
+        response = await call_llm_interruptible(
+            state,
+            self.context,
+            self.client,
+            self.model_name,
+            selection_prompt,
+            self.sampling_params,
+            "formalization_selection_agent",
+        )
+        selection_output = response[0]
 
-                # Get aligned formalizations from metadata
-                aligned_formalizations = state.metadata.get("aligned_formalizations", [])
+        # Extract analysis and selected index
+        analysis = self._extract_selection_analysis(selection_output)
+        selected_index = self._extract_selected_index(selection_output)
 
-                if not aligned_formalizations:
-                    logger.error(
-                        f"Formalization Selection Agent: No aligned formalizations found for state {state.id}"
-                    )
-                    await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-                    continue
+        if not analysis or selected_index is None:
+            logger.warning(
+                f"Formalization Selection Agent: Failed to extract selection for state {state.id}, defaulting to first formalization"
+            )
+            selected_index = 1
 
-                # If only one formalization, no need to select
-                if len(aligned_formalizations) == 1:
-                    logger.info(
-                        f"Formalization Selection Agent: Only one formalization available for state {state.id}, skipping selection"
-                    )
-                    state.formal_statement = aligned_formalizations[0]
-                    await self.add_state_request("theorem_retrieval_agent", state)
-                    await self.cleanup_cancellation_event(state)
-                    continue
+        # Validate index (LLM returns 1-based index, convert to 0-based)
+        selected_index_zero_based = selected_index - 1
+        if selected_index_zero_based < 0 or selected_index_zero_based >= len(
+            aligned_formalizations
+        ):
+            logger.warning(
+                f"Formalization Selection Agent: Invalid selection index {selected_index} for state {state.id}, defaulting to first formalization"
+            )
+            selected_index_zero_based = 0
 
-                logger.info(
-                    f"Formalization Selection Agent: Selecting from {len(aligned_formalizations)} aligned formalizations for state {state.id}"
-                )
+        selected_formalization = aligned_formalizations[selected_index_zero_based]
 
-                # Generate prompt for formalization selection
-                selection_prompt = prompt_manager.formalization_selection(
-                    informal_statement=state.informal_statement,
-                    formalizations=aligned_formalizations,
-                )
+        logger.info(
+            f"Formalization Selection Agent: Selected formalization {selected_index} (out of {len(aligned_formalizations)}) for state {state.id}"
+        )
 
-                # Get LLM response
-                response = await call_llm_interruptible(
-                    state,
-                    self.context,
-                    self.client,
-                    self.model_name,
-                    selection_prompt,
-                    self.sampling_params,
-                    "formalization_selection_agent",
-                )
-                selection_output = response[0]
+        # Set the selected formalization as the formal statement
+        state.formal_statement = selected_formalization
 
-                # Extract analysis and selected index
-                analysis = self._extract_selection_analysis(selection_output)
-                selected_index = self._extract_selected_index(selection_output)
-
-                if not analysis or selected_index is None:
-                    logger.warning(
-                        f"Formalization Selection Agent: Failed to extract selection for state {state.id}, defaulting to first formalization"
-                    )
-                    selected_index = 1
-
-                # Validate index (LLM returns 1-based index, convert to 0-based)
-                selected_index_zero_based = selected_index - 1
-                if selected_index_zero_based < 0 or selected_index_zero_based >= len(
-                    aligned_formalizations
-                ):
-                    logger.warning(
-                        f"Formalization Selection Agent: Invalid selection index {selected_index} for state {state.id}, defaulting to first formalization"
-                    )
-                    selected_index_zero_based = 0
-
-                selected_formalization = aligned_formalizations[selected_index_zero_based]
-
-                logger.info(
-                    f"Formalization Selection Agent: Selected formalization {selected_index} (out of {len(aligned_formalizations)}) for state {state.id}"
-                )
-
-                # Save trace to database
-                await self.db.formalizationselectiontrace.create(
-                    data={
-                        "prompt": selection_prompt,
-                        "output": selection_output,
-                        "analysis": analysis,
-                        "selectedIndex": selected_index,
-                        "selectedFormalization": selected_formalization,
-                        "stateId": state.id,
-                    }
-                )
-
-                # Set the selected formalization as the formal statement
-                state.formal_statement = selected_formalization
-                state.metadata["selected_formalization"] = selected_formalization
-                state.metadata["selected_formalization_index"] = selected_index_zero_based
-
-                # Route to statement refinement agent
-                await self.add_state_request("statement_refinement_agent", state)
-                
-                # Cleanup cancellation event after routing
-                await self.cleanup_cancellation_event(state)
-
-            except CancellationError as e:
-                # State was cancelled during processing
-                logger.info(f"Formalization Selection Agent: {e}")
-                if "state" in locals():
-                    await self.add_state_request("finish_agent", state)
-                    await self.cleanup_cancellation_event(state)
-            except Exception as e:
-                logger.error(f"Error in Formalization Selection Agent: {e}")
-                import traceback
-                traceback.print_exc()
-                try:
-                    if "state" in locals():
-                        await self.add_state_request("finish_agent", state)
-                        await self.cleanup_cancellation_event(state)
-                except Exception:
-                    pass
-
+        # Route to prover agent
+        await self.add_state_request("prover_agent", state)
+    

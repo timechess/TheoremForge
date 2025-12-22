@@ -1,11 +1,11 @@
 from loguru import logger
 from theoremforge.agents.base_agent import BaseAgent
-from theoremforge.state import TheoremForgeContext
+from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from openai import AsyncOpenAI
+from google.genai import Client
 from theoremforge.utils import (
     extract_lean_code,
     call_llm_interruptible,
-    CancellationError,
 )
 from theoremforge.prompt_manager import prompt_manager
 
@@ -23,106 +23,47 @@ class SketchCorrectionAgent(BaseAgent):
             agent_name="sketch_correction_agent",
             context=context,
         )
-        self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        if model_name.startswith("gemini-"):
+            self.client = Client(api_key=api_key, http_options={"base_url": base_url}, vertexai=True)
+        else:
+            self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=1500)
         self.model_name = model_name
         self.sampling_params = sampling_params
 
-    async def run(self):
-        while True:
-            try:
-                state = await self.task_queue.get()
-                logger.info(f"Sketch Correction Agent: Processing state {state.id}")
+    async def _run(self, state: TheoremForgeState):
+        prompt = prompt_manager.sketch_correction(
+            state.formal_statement,
+            state.metadata["failed_sketch"]["code"],
+            state.metadata["failed_sketch"]["error_str"],
+        )
 
-                # Register cancellation event for this state
-
-                await self.register_cancellation_event(state)
-
-                # Check if state should be skipped (blacklisted or cancelled)
-
-                if await self.should_skip_state(state):
-                    await self.add_state_request("finish_agent", state)
-
-                    await self.cleanup_cancellation_event(state)
-
-                    continue
-
-                if "failed_attempt" not in state.metadata:
-                    logger.error(
-                        f"Sketch Correction Agent: No failed attempt found for state {state.id}"
-                    )
-                    await self.add_state_request("finish_agent", state)
-                    continue
-
-                prompt = prompt_manager.sketch_correction(
-                    state.formal_statement,
-                    state.metadata["failed_attempt"]["code"],
-                    state.metadata["failed_attempt"]["error_str"],
-                )
-
-                response = await call_llm_interruptible(
-                    state,
-                    self.context,
-                    self.client,
-                    self.model_name,
-                    prompt,
-                    self.sampling_params,
-                    "sketch_correction_agent",
-                )
-                codes = [extract_lean_code(code) for code in response]
-                valid_flag = False
-
-                for i, code in enumerate(codes):
-                    if valid_flag:
-                        break
-                    if not code:
-                        continue
-
-                    valid, messages, error_str = await self.context.verifier.verify(
-                        code, True
-                    )
-
-                    if valid:
-                        logger.info(
-                            f"Sketch Correction Agent: Successfully corrected proof sketch for state {state.id}"
-                        )
-                        state.proof_sketch = code
-                        valid_flag = True
-                        await self.add_state_request("subgoal_extraction_agent", state)
-
-                    await self.db.sketchcorrectiontrace.create(
-                        data={
-                            "prompt": prompt,
-                            "output": response[i],
-                            "outputCode": code,
-                            "valid": valid,
-                            "errorMessage": error_str,
-                            "stateId": state.id,
-                        }
-                    )
-
-                if not valid_flag:
-                    logger.info(
-                        f"Sketch Correction Agent: Failed to correct proof sketch for state {state.id}, routing to finish"
-                    )
-                    await self.add_state_request("finish_agent", state)
-
-            except CancellationError as e:
-                # State was cancelled during processing
-
-                logger.info(f"Sketch Correction Agent: {e}")
-
-                if "state" in locals():
-                    await self.add_state_request("finish_agent", state)
-
-                    await self.cleanup_cancellation_event(state)
-
-            except Exception as e:
-                logger.error(f"Sketch Correction Agent: Error processing state: {e}")
-                import traceback
-
-                traceback.print_exc()
-                try:
-                    if "state" in locals():
-                        await self.add_state_request("finish_agent", state)
-                except Exception:
-                    pass
+        response = await call_llm_interruptible(
+            state,
+            self.context,
+            self.client,
+            self.model_name,
+            prompt,
+            self.sampling_params,
+            "sketch_correction_agent",
+        )
+        code = extract_lean_code(response[0])
+        if not code:
+            logger.info(
+                f"Sketch Correction Agent: Failed to extract code from response for state {state.id}"
+            )
+            await self.add_state_request("finish_agent", state)
+            return
+        valid, messages, error_str = await self.context.verifier.verify(
+            code, True
+        )
+        if valid:
+            logger.info(
+                f"Sketch Correction Agent: Successfully corrected proof sketch for state {state.id}"
+            )
+            state.proof_sketch = code
+            await self.add_state_request("subgoal_extraction_agent", state)
+        else:
+            logger.info(
+                f"Sketch Correction Agent: Failed to correct proof sketch for state {state.id}, routing to finish"
+            )
+            await self.add_state_request("finish_agent", state)

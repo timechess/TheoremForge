@@ -9,10 +9,9 @@ class PromptManager:
     def get_prompt(self, prompt_name: str) -> str:
         return self.env.get_template(prompt_name).render()
 
-    def proof_attempt(self, formal_statement: str, useful_theorems: str = "") -> str:
+    def proof_attempt(self, formal_statement: str) -> str:
         return self.env.get_template("proof_attempt.j2").render(
             formal_statement=formal_statement,
-            useful_theorems=useful_theorems
         )
 
     def proof_correction(self, lean_code: str, error_message: str) -> str:
@@ -74,15 +73,24 @@ class PromptManager:
             useful_theorems=useful_theorems,
         )
 
-    def shallow_solve_initial(self, formal_statement: str, informal_proof: str, useful_theorems: str) -> str:
+    def shallow_solve_initial(
+        self, formal_statement: str, informal_proof: str, useful_theorems: str
+    ) -> str:
         return self.env.get_template("shallow_solve_initial.j2").render(
             formal_statement=formal_statement,
             informal_proof=informal_proof,
             useful_theorems=useful_theorems,
         )
 
-    def shallow_solve_refinement(self, failed_code: str, error_message: str, useful_theorems: str) -> str:
+    def shallow_solve_refinement(
+        self,
+        formal_statement: str,
+        failed_code: str,
+        error_message: str,
+        useful_theorems: str,
+    ) -> str:
         return self.env.get_template("shallow_solve_refinement.j2").render(
+            formal_statement=formal_statement,
             failed_code=failed_code,
             error_message=error_message,
             useful_theorems=useful_theorems,
@@ -162,8 +170,7 @@ class PromptManager:
             formalizations=enumerate(formalizations),
         )
 
-
-    def subgoal_extraction(self,  proof_sketch: str) -> str:
+    def subgoal_extraction(self, proof_sketch: str) -> str:
         return self.env.get_template("subgoal_extraction.j2").render(
             proof_sketch=proof_sketch,
         )

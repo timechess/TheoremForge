@@ -19,7 +19,7 @@ Generated Formal Statement (Lean 4):
 ```
 
 Your Task:
-Carefully analyze whether the formal Lean 4 statement is semantically aligned with the original informal statement{% if normalized_statement %} and the normalized statement{% endif %}. Note that the normalized statement may contain information (e.g. the answer to a question) that is not present in the informal statement. Check whether the normalized statement is aligned with the informal statement. Then check whether the formal statement is aligned with the normalized statement.
+Carefully analyze whether the formal Lean 4 statement is semantically aligned with the original informal statement{% if normalized_statement %} and the normalized statement{% endif %}. Note that the normalized statement may contain information (e.g. the answer to a question) that is not present in the informal statement. Check whether the normalized statement is aligned with the informal statement. Then check whether the formal statement is aligned with the normalized statement. If NOT_ALIGNED, try to fix the formal statement to be aligned with the informal statement.
 
 Evaluation Criteria:
 1. **Mathematical Equivalence**: Does the formal statement express the same mathematical claim as the normalized statement?
@@ -38,9 +38,6 @@ Analysis Process:
 4. Look for any discrepancies, missing elements, or extra constraints
 5. Check whether the formal statement is provable given the provided premises
 
-Hint:
-- For simplicity, propositional predicates and boolean predicates can be treated as the same.
-
 Output Format:
 Provide your analysis in the following structure:
 
@@ -51,3 +48,7 @@ Provide your analysis in the following structure:
 <verdict>
 [Output EXACTLY one of: "ALIGNED" or "NOT_ALIGNED"]
 </verdict>
+
+<fixed_formal_statement>
+[Output the fixed formal statement inside ```lean4``` code blocks. You should only output ONE fixed formalization at the end.]
+</fixed_formal_statement>

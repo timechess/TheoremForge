@@ -1,3 +1,4 @@
+from typing import Any, Dict
 from lean_interact import (
     LeanREPLConfig,
     AutoLeanServer,
@@ -9,16 +10,8 @@ from loguru import logger
 import re
 import asyncio
 import multiprocessing
-import sys
-from pathlib import Path
 
-# Add parent directory to path to import config
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from theoremforge.config import config
-
-lean_config = config.lean_server
-HEADER = lean_config.get("LeanServerHeader", "import Mathlib\n")
-DEFAULT_TIMEOUT = lean_config.get("LeanServerTimeout", 20)
+from theoremforge.utils import get_error_str
 
 
 def erase_header(code: str) -> str:
@@ -41,7 +34,7 @@ def erase_header(code: str) -> str:
     ).strip("\n")
 
 
-def normalize_header(code: str) -> str:
+def normalize_header(code: str, header: str) -> str:
     """
     Replace all import statements in the code with the standard header.
 
@@ -56,7 +49,7 @@ def normalize_header(code: str) -> str:
     set_option_pattern = re.compile(r"^set_option\s+.*$", re.MULTILINE)
     normalized_code = re.sub(
         import_pattern,
-        HEADER,
+        header,
         re.sub(open_pattern, "", re.sub(set_option_pattern, "", code)),
     )
     return normalized_code
@@ -77,7 +70,9 @@ class LeanServerWorker(multiprocessing.Process):
         repl_config (LeanREPLConfig): Configuration for the Lean server.
     """
 
-    def __init__(self, worker_id, task_queue, result_queue, repl_config, init_event):
+    def __init__(
+        self, worker_id, task_queue, result_queue, repl_config, init_event, config
+    ):
         """
         Initialize a new worker process.
 
@@ -94,6 +89,7 @@ class LeanServerWorker(multiprocessing.Process):
         self.result_queue = result_queue
         self.repl_config = repl_config
         self.init_event = init_event
+        self.config = config
 
     def run(self):
         """
@@ -109,7 +105,10 @@ class LeanServerWorker(multiprocessing.Process):
         logger.info(f"Worker {self.worker_id}: Initializing Lean server")
         try:
             server = AutoLeanServer(self.repl_config)
-            context_env = server.run(Command(cmd=HEADER), add_to_session_cache=True).env
+            context_env = server.run(
+                Command(cmd=self.config.get("LeanServerHeader", "import Mathlib\n")),
+                add_to_session_cache=True,
+            ).env
             logger.info(f"Worker {self.worker_id}: Lean server initialized")
 
             # Signal that this worker is fully initialized
@@ -129,20 +128,22 @@ class LeanServerWorker(multiprocessing.Process):
                         code, allow_sorry = args
                         response = server.run(
                             Command(cmd=erase_header(code), env=context_env),
-                            timeout=DEFAULT_TIMEOUT,
+                            timeout=self.config.get("LeanServerTimeout", 20),
                         )
 
                         if isinstance(response, LeanError):
                             logger.error(
                                 f"Worker {self.worker_id}: Lean error: {response}"
                             )
-                            self.result_queue.put((task_id, (False, [])))
+                            self.result_queue.put((task_id, (False, [], "")))
                         else:
                             is_valid = response.lean_code_is_valid(
                                 allow_sorry=allow_sorry
                             )
                             messages = [msg.model_dump() for msg in response.messages]
-                            self.result_queue.put((task_id, (is_valid, messages)))
+                            error_msgs = [msg for msg in messages if msg["severity"] == "error"]
+                            error_str = get_error_str(erase_header(code), error_msgs)
+                            self.result_queue.put((task_id, (is_valid, messages, error_str)))
 
                     except Exception as e:
                         logger.warning(f"Worker {self.worker_id}: Error: {e}")
@@ -153,14 +154,19 @@ class LeanServerWorker(multiprocessing.Process):
                             )
                             server = AutoLeanServer(self.repl_config)
                             context_env = server.run(
-                                Command(cmd=HEADER), add_to_session_cache=True
+                                Command(
+                                    cmd=self.config.get(
+                                        "LeanServerHeader", "import Mathlib\n"
+                                    )
+                                ),
+                                add_to_session_cache=True,
                             ).env
                         except Exception as e2:
                             logger.error(
                                 f"Worker {self.worker_id}: Failed to reinitialize: {e2}"
                             )
 
-                        self.result_queue.put((task_id, (False, [])))
+                        self.result_queue.put((task_id, (False, [], "")))
                 elif task_type == "extract_subgoals":
                     try:
                         logger.debug(
@@ -169,13 +175,13 @@ class LeanServerWorker(multiprocessing.Process):
                         code = args
                         response = server.run(
                             Command(cmd=erase_header(code), env=context_env),
-                            timeout=DEFAULT_TIMEOUT,
+                            timeout=self.config.get("LeanServerTimeout", 20),
                         )
                         processed_code = code.replace("sorry", "extract_goal")
                         sorries = response.sorries
                         processed_response = server.run(
                             Command(cmd=erase_header(processed_code), env=context_env),
-                            timeout=DEFAULT_TIMEOUT,
+                            timeout=self.config.get("LeanServerTimeout", 20),
                         )
                         extracted_goals = {
                             (
@@ -224,24 +230,27 @@ class AsyncVerifier:
         is_initialized (bool): Whether the worker pool has been initialized.
     """
 
-    def __init__(self, project: str, workers: int = 8) -> None:
+    def __init__(self, config: Dict[str, Any]) -> None:
         """
         Initialize a new AsyncVerifier.
 
         Args:
-            project (str): The project to use for verification.
-            workers (int, optional): Number of worker processes to use. Defaults to the number of CPU cores.
+            config (Dict[str, Any]): Configuration for the AsyncVerifier.
         """
-        self.repl_config = LeanREPLConfig(project=LocalProject(directory=project))
-        self.workers = workers
+        self.repl_config = LeanREPLConfig(
+            project=LocalProject(directory=config.get("LocalLeanProject", None))
+        )
+        self.workers = config.get("LeanServerWorkers", 8)
         self.task_queue = multiprocessing.Queue()
         self.result_queue = multiprocessing.Queue()
         self.worker_processes = []
         self.next_task_id = 0
         self.is_initialized = False
         self.init_events = []
+        self.config = config
 
-        logger.info(f"AsyncVerifier initialized with {workers} workers")
+        self.initialize_worker_pool()
+        logger.info(f"AsyncVerifier initialized with {self.workers} workers")
 
     def initialize_worker_pool(self):
         """
@@ -267,6 +276,7 @@ class AsyncVerifier:
                 result_queue=self.result_queue,
                 repl_config=self.repl_config,
                 init_event=self.init_events[i],
+                config=self.config,
             )
             worker.start()
             self.worker_processes.append(worker)
@@ -305,9 +315,19 @@ class AsyncVerifier:
         self.is_initialized = False
         logger.info("Worker pool shutdown complete")
 
+    async def close(self):
+        """
+        Async wrapper for shutdown to provide consistent async interface.
+        
+        This method runs the synchronous shutdown in a thread pool executor
+        to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.shutdown)
+
     async def verify(
         self, code: str, allow_sorry: bool = True
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict], str]:
         """
         Asynchronously verify a single piece of Lean code.
 
@@ -318,9 +338,10 @@ class AsyncVerifier:
             allow_sorry (bool, optional): Whether to allow 'sorry' in the code. Defaults to True.
 
         Returns:
-            tuple[bool, list[dict]]: A tuple containing:
+            tuple[bool, list[dict], str]: A tuple containing:
                 - bool: Whether the verification was successful.
                 - list[dict]: Messages from the verification process.
+                - str: Error message if the verification failed.
         """
         if not self.is_initialized:
             self.initialize_worker_pool()
