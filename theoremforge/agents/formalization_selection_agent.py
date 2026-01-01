@@ -45,14 +45,14 @@ class FormalizationSelectionAgent(BaseAgent):
         aligned_formalizations = state.metadata.get("aligned_formalizations", [])
         # If only one formalization, no need to select
         if len(aligned_formalizations) == 1:
-            logger.info(
+            logger.debug(
                 f"Formalization Selection Agent: Only one formalization available for state {state.id}, skipping selection"
             )
             state.formal_statement = aligned_formalizations[0]
             await self.add_state_request("theorem_retrieval_agent", state)
             return
 
-        logger.info(
+        logger.debug(
             f"Formalization Selection Agent: Selecting from {len(aligned_formalizations)} aligned formalizations for state {state.id}"
         )
 
@@ -96,7 +96,7 @@ class FormalizationSelectionAgent(BaseAgent):
 
         selected_formalization = aligned_formalizations[selected_index_zero_based]
 
-        logger.info(
+        logger.debug(
             f"Formalization Selection Agent: Selected formalization {selected_index} (out of {len(aligned_formalizations)}) for state {state.id}"
         )
 

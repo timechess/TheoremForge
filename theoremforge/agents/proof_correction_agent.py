@@ -7,6 +7,7 @@ from google.genai import Client
 from theoremforge.utils import (
     extract_lean_code,
     call_llm_interruptible,
+    statement_check,
 )
 from theoremforge.prompt_manager import prompt_manager
 
@@ -34,7 +35,7 @@ class ProofCorrectionAgent(BaseAgent):
     async def _run(self, state: TheoremForgeState):
         failed_attempts = state.metadata["failed_attempts"]
 
-        logger.info(
+        logger.debug(
             f"Proof Correction Agent: Processing {len(failed_attempts)} failed attempts for state {state.id}"
         )
         prompts = [
@@ -78,7 +79,7 @@ class ProofCorrectionAgent(BaseAgent):
 
                 # Check for cancellation during verification loop
                 if await self.is_cancelled(state):
-                    logger.info(
+                    logger.debug(
                         f"Proof Correction Agent: State {state.id} cancelled during verification"
                     )
                     await self.add_state_request("finish_agent", state)
@@ -87,12 +88,15 @@ class ProofCorrectionAgent(BaseAgent):
                 if not code:
                     continue
 
+                if not statement_check(state.formal_statement, code):
+                    continue
+
                 valid, messages, error_str = await self.context.verifier.verify(
                     code, False
                 )
 
                 if valid:
-                    logger.info(
+                    logger.debug(
                         f"Proof Correction Agent: Successfully corrected formal proof for state {state.id} (attempt {attempt_idx + 1})"
                     )
                     state.formal_proof = code
@@ -104,12 +108,12 @@ class ProofCorrectionAgent(BaseAgent):
         if not valid_flag:
             # Check if this is a subgoal (has parent_id)
             if state.parent_id:
-                logger.info(
+                logger.debug(
                     f"Proof Correction Agent: Failed to correct subgoal {state.id}, routing to informal_proof_agent"
                 )
                 await self.add_state_request("informal_proof_agent", state)
             else:
-                logger.info(
+                logger.debug(
                     f"Proof Correction Agent: Failed to correct formal proof for state {state.id}, routing to theorem_retrieval_agent"
                 )
                 await self.add_state_request("theorem_retrieval_agent", state)

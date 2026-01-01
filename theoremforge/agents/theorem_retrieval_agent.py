@@ -58,13 +58,13 @@ class TheoremRetrievalAgent(BaseAgent):
         )
         query_generation_output = response[0]
         queries = self._extract_search_queries(query_generation_output)
-        logger.info(
+        logger.debug(
             f"Theorem Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
         )
         
         # Check for cancellation before expensive retrieval operation
         if await self.is_cancelled(state):
-            logger.info(
+            logger.debug(
                 f"Theorem Retrieval Agent: State {state.id} cancelled before retrieval"
             )
             await self.add_state_request("finish_agent", state)
@@ -92,7 +92,7 @@ class TheoremRetrievalAgent(BaseAgent):
             for theorem in results
             if theorem.primary_declaration.lean_name in theorem_names
         ]
-        logger.info(
+        logger.debug(
             f"Theorem Retrieval Agent: Selected {len(selected_theorems)} theorems for state {state.id}"
         )
         theorem_selection_results = [

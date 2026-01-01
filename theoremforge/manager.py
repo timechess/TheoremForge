@@ -3,10 +3,13 @@ TheoremForge State Manager - Agent-Based Architecture
 
 This manager orchestrates multiple autonomous agents that communicate via queues.
 Each agent processes states independently and routes them to other agents as needed.
+
+The FinishAgent runs in a separate process to avoid blocking the main event loop.
 """
 
 import asyncio
 import json
+import multiprocessing as mp
 from uuid import uuid4
 from typing import Optional, Dict, Any, Callable
 from pathlib import Path
@@ -35,7 +38,7 @@ from theoremforge.agents.formalization_selection_agent import (
     FormalizationSelectionAgent,
 )
 from theoremforge.agents.assembly_correction_agent import AssemblyCorrectionAgent
-from theoremforge.agents.finish_agent import FinishAgent
+from theoremforge.agents.finish_agent_process import run_finish_agent_process
 from theoremforge.db import SQLiteClient
 from theoremforge.retriever import Retriever
 
@@ -138,11 +141,29 @@ class TheoremForgeStateManager:
 
         self.retriever = Retriever()
 
-        # Initialize context
-        self.context = TheoremForgeContext(verifier_config=lean_config)
+        # Initialize multiprocessing manager for shared state
+        self._mp_manager = mp.Manager()
+        
+        # Create finish_agent queue (multiprocess-safe)
+        self._finish_queue = mp.Queue()
+        
+        # Initialize context with multiprocessing manager
+        self.context = TheoremForgeContext(
+            verifier_config=lean_config,
+            mp_manager=self._mp_manager
+        )
+        
+        # Set the finish queue in context
+        self.context.finish_queue = self._finish_queue
 
         # Initialize shared SQLite client
         self.context.db = SQLiteClient()
+        
+        # Store db_path for finish_agent process
+        self._db_path = self.context.db.db_path
+        
+        # Finish agent process handle
+        self._finish_process: Optional[mp.Process] = None
 
         # Initialize agents
         self._initialize_agents(
@@ -513,13 +534,10 @@ class TheoremForgeStateManager:
             for _ in range(self.max_workers)
         ]
 
-        self.context.agents["finish_agent"] = [
-            FinishAgent(
-                context=self.context,
-            )
-        ]
-
-        logger.info(f"Initialized {len(self.context.agents)} agents")
+        # Note: FinishAgent runs in a separate process, not as asyncio task
+        # It will be started in the start() method
+        
+        logger.info(f"Initialized {len(self.context.agents)} agents (FinishAgent runs in separate process)")
 
     def _setup_finish_callback(self):
         """Setup callback to track finished states."""
@@ -538,8 +556,25 @@ class TheoremForgeStateManager:
         # Connect to shared database
         await self.context.db.connect()
         logger.info("Database connected")
+        
+        # Start FinishAgent in a separate process
+        self._finish_process = mp.Process(
+            target=run_finish_agent_process,
+            args=(
+                self._finish_queue,
+                self.context.black_list,
+                self.context.statement_record,
+                self.context.proof_record,
+                self.context.cancellation_flags,
+                self._db_path,
+            ),
+            name="FinishAgentProcess",
+            daemon=True,
+        )
+        self._finish_process.start()
+        logger.info(f"Started FinishAgent process (PID: {self._finish_process.pid})")
 
-        # Start all agent tasks
+        # Start all agent tasks (except finish_agent which runs in separate process)
         for agent_name, agents in self.context.agents.items():
             for i, agent in enumerate(agents):
                 task = asyncio.create_task(agent.run(), name=f"agent_{agent_name}_{i}")
@@ -570,11 +605,17 @@ class TheoremForgeStateManager:
 
         # Trigger cancellation for all active states
         logger.info("Triggering cancellation for all active states...")
-        async with self.context.cancellation_lock:
-            for state_id, event in self.context.cancellation_events.items():
-                if not event.is_set():
-                    event.set()
-                    logger.debug(f"Triggered cancellation for state {state_id}")
+        if self.context.is_mp_mode():
+            # In mp mode, use cancellation_flags dict
+            for state_id in list(self.context.cancellation_flags.keys()):
+                self.context.cancellation_flags[state_id] = True
+                logger.debug(f"Triggered cancellation for state {state_id}")
+        else:
+            async with self.context.cancellation_lock:
+                for state_id, event in self.context.cancellation_events.items():
+                    if not event.is_set():
+                        event.set()
+                        logger.debug(f"Triggered cancellation for state {state_id}")
 
         # Cancel all agent tasks
         logger.info("Cancelling all agent tasks...")
@@ -592,11 +633,28 @@ class TheoremForgeStateManager:
                 logger.warning("Some agent tasks did not complete within timeout")
             except Exception as e:
                 logger.error(f"Error during shutdown: {e}")
+        
+        # Stop FinishAgent process
+        if self._finish_process is not None and self._finish_process.is_alive():
+            logger.info("Stopping FinishAgent process...")
+            # Send poison pill to finish queue to signal shutdown
+            self._finish_queue.put(None)
+            # Wait for process to finish
+            self._finish_process.join(timeout=5.0)
+            if self._finish_process.is_alive():
+                logger.warning("FinishAgent process did not stop gracefully, terminating...")
+                self._finish_process.terminate()
+                self._finish_process.join(timeout=2.0)
+            logger.info("FinishAgent process stopped")
 
-        # Clear all cancellation events
-        async with self.context.cancellation_lock:
-            self.context.cancellation_events.clear()
-            logger.debug("Cleared all cancellation events")
+        # Clear all cancellation events/flags
+        if self.context.is_mp_mode():
+            self.context.cancellation_flags.clear()
+            logger.debug("Cleared all cancellation flags")
+        else:
+            async with self.context.cancellation_lock:
+                self.context.cancellation_events.clear()
+                logger.debug("Cleared all cancellation events")
 
         # Disconnect shared MongoDB database
         try:
@@ -619,35 +677,38 @@ class TheoremForgeStateManager:
             while self._running:
                 await asyncio.sleep(2.0)
 
-                # Access record and root_state_ids with locks
-                async with self.context.record_lock:
-                    async with self.context.root_state_ids_lock:
-                        # Only count root states (manually submitted), not subgoals
-                        root_states_in_record = {
-                            state_id
-                            for state_id in self.context.statement_record.keys()
-                            if state_id in self.context.root_state_ids
-                        }
-                        current_size = len(root_states_in_record)
+                # Lock-free read: dict/set operations are atomic in asyncio single-thread model
+                # Take snapshots of references to avoid issues during iteration
+                statement_record = self.context.statement_record
+                proof_record = self.context.proof_record
+                root_state_ids = self.context.root_state_ids
+                
+                # Only count root states (manually submitted), not subgoals
+                root_states_in_record = {
+                    state_id
+                    for state_id in statement_record.keys()
+                    if state_id in root_state_ids
+                }
+                current_size = len(root_states_in_record)
 
-                        if current_size > last_record_size:
-                            # New root states finished
-                            finished_count = current_size - last_record_size
+                if current_size > last_record_size:
+                    # New root states finished
+                    finished_count = current_size - last_record_size
 
-                            # Count successes (non-None entries in record for root states)
-                            successful = sum(
-                                1
-                                for state_id in root_states_in_record
-                                if self.context.proof_record[state_id] is not None
-                            )
-                            failed = len(root_states_in_record) - successful
+                    # Count successes (non-None entries in record for root states)
+                    successful = sum(
+                        1
+                        for state_id in root_states_in_record
+                        if proof_record.get(state_id) is not None
+                    )
+                    failed = len(root_states_in_record) - successful
 
-                            async with self._stats_lock:
-                                self.stats["total_finished"] += finished_count
-                                self.stats["successful"] = successful
-                                self.stats["failed"] = failed
+                    async with self._stats_lock:
+                        self.stats["total_finished"] += finished_count
+                        self.stats["successful"] = successful
+                        self.stats["failed"] = failed
 
-                            last_record_size = current_size
+                    last_record_size = current_size
 
         except asyncio.CancelledError:
             logger.debug("Stats monitor cancelled")
@@ -720,8 +781,7 @@ class TheoremForgeStateManager:
         await self.context.shared_queues["prover_agent"].put(new_state)
 
         # Track this as a root state
-        async with self.context.root_state_ids_lock:
-            self.context.root_state_ids.add(theorem_id)
+        self.context.add_root_state(theorem_id)
 
         async with self._stats_lock:
             self.stats["total_submitted"] += 1
@@ -766,8 +826,7 @@ class TheoremForgeStateManager:
         await self.context.shared_queues["statement_normalization_agent"].put(new_state)
 
         # Track this as a root state
-        async with self.context.root_state_ids_lock:
-            self.context.root_state_ids.add(statement_id)
+        self.context.add_root_state(statement_id)
 
         async with self._stats_lock:
             self.stats["total_submitted"] += 1
@@ -836,20 +895,16 @@ class TheoremForgeStateManager:
 
     async def get_stats(self) -> Dict[str, Any]:
         """Get current statistics."""
-        async with self.context.record_lock:
-            total_record_len = len(self.context.statement_record)
-
-            async with self.context.root_state_ids_lock:
-                root_states_count = len(
-                    [
-                        state_id
-                        for state_id in self.context.statement_record.keys()
-                        if state_id in self.context.root_state_ids
-                    ]
-                )
-
-        async with self.context.black_list_lock:
-            blacklist_len = len(self.context.black_list)
+        # Lock-free read: dict/set operations are atomic in asyncio single-thread model
+        total_record_len = len(self.context.statement_record)
+        root_states_count = len(
+            [
+                state_id
+                for state_id in self.context.statement_record.keys()
+                if state_id in self.context.root_state_ids
+            ]
+        )
+        blacklist_len = len(self.context.black_list)
 
         return {
             **self.stats,
@@ -925,11 +980,10 @@ class TheoremForgeStateManager:
         output_path = Path(output_file)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Determine which states to export
+        # Determine which states to export (lock-free: list() on set is atomic)
         if statement_ids is None:
             # Export all root states
-            async with self.context.root_state_ids_lock:
-                ids_to_export = list(self.context.root_state_ids)
+            ids_to_export = list(self.context.root_state_ids)
         else:
             ids_to_export = statement_ids
 
@@ -939,8 +993,8 @@ class TheoremForgeStateManager:
             for state_id in ids_to_export:
                 try:
                     # Fetch from database
-                    state_doc = await self.context.db.theoremforgestate.find_one(
-                        {"id": state_id}
+                    state_doc = await self.context.db.get_state(
+                        state_id
                     )
 
                     if state_doc:

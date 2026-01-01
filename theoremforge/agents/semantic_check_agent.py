@@ -1,4 +1,5 @@
 from theoremforge.agents.base_agent import BaseAgent
+from theoremforge.lean_server.server import erase_header
 from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from loguru import logger
 from openai import AsyncOpenAI
@@ -7,8 +8,6 @@ import re
 import asyncio
 from theoremforge.prompt_manager import prompt_manager
 from theoremforge.utils import call_llm_interruptible, extract_lean_code
-
-
 class SemanticCheckAgent(BaseAgent):
     def __init__(
         self,
@@ -53,7 +52,7 @@ class SemanticCheckAgent(BaseAgent):
         # Get valid formalizations from metadata (from autoformalization or statement correction)
         valid_formalizations = state.metadata.get("valid_formalizations", [])
 
-        logger.info(
+        logger.debug(
             f"Semantic Check Agent: Checking {len(valid_formalizations)} valid formalizations concurrently for state {state.id}"
         )
 
@@ -99,7 +98,7 @@ class SemanticCheckAgent(BaseAgent):
                 semantic_check_output
             )
             if fixed_formal_statement:
-                fixed_formal_statement = extract_lean_code(fixed_formal_statement)
+                fixed_formal_statement = erase_header(extract_lean_code(fixed_formal_statement))
             if not semantic_check_analysis or not semantic_check_conclusion:
                 logger.warning(
                     f"Semantic Check Agent: Failed to extract analysis or conclusion for one formalization of state {state.id}"
@@ -107,7 +106,7 @@ class SemanticCheckAgent(BaseAgent):
                 continue
 
             if semantic_check_conclusion == "ALIGNED":
-                logger.info(
+                logger.debug(
                     f"Semantic Check Agent: Found semantically aligned formalization for state {state.id}"
                 )
                 aligned_formalizations.append(valid_formalizations[i])
@@ -130,14 +129,14 @@ class SemanticCheckAgent(BaseAgent):
                     continue
 
         if aligned_formalizations:
-            logger.info(
+            logger.debug(
                 f"Semantic Check Agent: Found {len(aligned_formalizations)} semantically aligned formalizations for state {state.id}, routing to formalization_selection_agent"
             )
             # Store all aligned formalizations in metadata
             state.metadata["aligned_formalizations"] = aligned_formalizations
             await self.add_state_request("formalization_selection_agent", state)
         else:
-            logger.info(
+            logger.debug(
                 f"Semantic Check Agent: No semantically aligned formalization found for state {state.id}, routing to finish_agent"
             )
             await self.add_state_request("finish_agent", state)

@@ -47,12 +47,12 @@ class SubgoalExtractionAgent(BaseAgent):
         subgoal_ids = [str(uuid4()) for _ in subgoals]
 
         if not subgoals:
-            logger.info(
+            logger.debug(
                 f"Subgoal Extraction Agent: No subgoals found for state {state.id}"
             )
             await self.add_state_request("finish_agent", state)
             return
-        logger.info(
+        logger.debug(
             f"Subgoal Extraction Agent: Found {len(subgoals)} subgoals for state {state.id}"
         )
         for subgoal_id, subgoal in zip(subgoal_ids, subgoals):

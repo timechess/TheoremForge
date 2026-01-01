@@ -30,37 +30,36 @@ class ProofAssemblyAgent(BaseAgent):
 
     async def _run(self, state: TheoremForgeState):
         # Check if subgoals are ready in record
-        async with self.context.record_lock:
-            subgoals_in_record = all(
+        subgoals_in_record = all(
+            [
+                subgoal_id in self.context.proof_record
+                for subgoal_id in state.subgoals
+            ]
+        )
+        all_subgoals_ready = False
+        subgoal_proofs = []
+
+        if subgoals_in_record:
+            all_subgoals_ready = all(
                 [
                     subgoal_id in self.context.proof_record
+                    and self.context.proof_record[subgoal_id]
                     for subgoal_id in state.subgoals
                 ]
             )
-            all_subgoals_ready = False
-            subgoal_proofs = []
-
-            if subgoals_in_record:
-                all_subgoals_ready = all(
-                    [
-                        subgoal_id in self.context.proof_record
-                        and self.context.proof_record[subgoal_id]
-                        for subgoal_id in state.subgoals
-                    ]
-                )
-                if all_subgoals_ready:
-                    subgoal_proofs = [
-                        self.context.proof_record[subgoal_id]
-                        for subgoal_id in state.subgoals
-                    ]
-                    subgoal_statements = [
-                        self.context.statement_record[subgoal_id]
-                        for subgoal_id in state.subgoals
-                    ]
+            if all_subgoals_ready:
+                subgoal_proofs = [
+                    self.context.proof_record[subgoal_id]
+                    for subgoal_id in state.subgoals
+                ]
+                subgoal_statements = [
+                    self.context.statement_record[subgoal_id]
+                    for subgoal_id in state.subgoals
+                ]
 
         if subgoals_in_record:
             if all_subgoals_ready:
-                logger.info(
+                logger.debug(
                     f"Proof Assembly Agent: All subgoals found for state {state.id}"
                 )
 
@@ -83,7 +82,7 @@ class ProofAssemblyAgent(BaseAgent):
                 if code:
                     # Check for cancellation before verification
                     if await self.is_cancelled(state):
-                        logger.info(
+                        logger.debug(
                             f"Proof Assembly Agent: State {state.id} cancelled before verification"
                         )
                         await self.add_state_request("finish_agent", state)
@@ -100,9 +99,8 @@ class ProofAssemblyAgent(BaseAgent):
                         state.formal_proof = "\n".join(subgoal_proofs + [code])
                         state.success = True
                         await self.add_state_request("finish_agent", state)
-                        await self.cleanup_cancellation_event(state)
                     else:
-                        logger.info(
+                        logger.debug(
                             f"Proof Assembly Agent: Assembly failed for state {state.id}, routing to finish_agent"
                         )
                         state.metadata["failed_assembly"] = {
@@ -112,14 +110,14 @@ class ProofAssemblyAgent(BaseAgent):
                         await self.add_state_request("assembly_correction_agent", state)
 
                 else:
-                    logger.info(
+                    logger.debug(
                         f"Proof Assembly Agent: Failed to generate formal proof for state {state.id}"
                     )
 
                     await self.add_state_request("finish_agent", state)
 
             else:
-                logger.info(
+                logger.debug(
                     f"Proof Assembly Agent: Some subgoals failed for state {state.id}"
                 )
                 await self.add_state_request("finish_agent", state)

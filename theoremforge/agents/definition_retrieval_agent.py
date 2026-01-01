@@ -62,7 +62,7 @@ class DefinitionRetrievalAgent(BaseAgent):
 
         query_generation_output = response[0]
         queries = self._extract_search_queries(query_generation_output)
-        logger.info(
+        logger.debug(
             f"Definition Retrieval Agent: Extracted {len(queries)} search queries for state {state.id}"
         )
 
@@ -88,7 +88,7 @@ class DefinitionRetrievalAgent(BaseAgent):
             for definition in results
             if definition.primary_declaration.lean_name in definition_names
         ]
-        logger.info(
+        logger.debug(
             f"Definition Retrieval Agent: Selected {len(selected_definitions)} definitions for state {state.id}"
         )
         definition_selection_results = [

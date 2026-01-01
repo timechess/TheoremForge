@@ -6,6 +6,7 @@ from google.genai import Client
 from theoremforge.utils import (
     extract_lean_code,
     call_llm_interruptible,
+    statement_check,
 )
 from theoremforge.prompt_manager import prompt_manager
 
@@ -48,22 +49,30 @@ class SketchCorrectionAgent(BaseAgent):
         )
         code = extract_lean_code(response[0])
         if not code:
-            logger.info(
+            logger.debug(
                 f"Sketch Correction Agent: Failed to extract code from response for state {state.id}"
             )
             await self.add_state_request("finish_agent", state)
             return
+
+        if not statement_check(state.formal_statement, code):
+            logger.debug(
+                f"Sketch Correction Agent: Proof does not contain the formal statement for state {state.id}"
+            )
+            await self.add_state_request("finish_agent", state)
+            return
+            
         valid, messages, error_str = await self.context.verifier.verify(
             code, True
         )
         if valid:
-            logger.info(
+            logger.debug(
                 f"Sketch Correction Agent: Successfully corrected proof sketch for state {state.id}"
             )
             state.proof_sketch = code
             await self.add_state_request("subgoal_extraction_agent", state)
         else:
-            logger.info(
+            logger.debug(
                 f"Sketch Correction Agent: Failed to correct proof sketch for state {state.id}, routing to finish"
             )
             await self.add_state_request("finish_agent", state)

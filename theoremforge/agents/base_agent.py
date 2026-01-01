@@ -12,7 +12,8 @@ class BaseAgent:
         self.context = context
         
         # Create shared queue for this agent type if it doesn't exist
-        if agent_name not in self.context.shared_queues:
+        # Note: finish_agent queue is handled separately in mp mode
+        if agent_name not in self.context.shared_queues and agent_name != "finish_agent":
             self.context.shared_queues[agent_name] = asyncio.Queue()
 
     @property
@@ -38,7 +39,7 @@ class BaseAgent:
 
             except CancellationError as e:
                 # State was cancelled during processing
-                logger.info(f"{self.agent_name}: {e}")
+                logger.error(f"{self.agent_name}: {e}")
                 if "state" in locals():
                     await self.add_state_request("finish_agent", state)
             except Exception as e:
@@ -60,13 +61,23 @@ class BaseAgent:
         """
         Add a state to the shared queue of the specified agent type.
         All agents of that type will compete to process it.
+        
+        For finish_agent in mp mode, uses multiprocessing.Queue.
         """
         logger.debug(f"Adding state {state.id} to {agent_name} shared queue")
-        await self.context.shared_queues[agent_name].put(state)
+        
+        if agent_name == "finish_agent" and self.context.is_mp_mode():
+            # In multiprocess mode, send to finish_agent via mp.Queue
+            # Serialize state to dict for cross-process transfer
+            self.context.finish_queue.put(state.model_dump())
+        else:
+            await self.context.shared_queues[agent_name].put(state)
 
     async def is_cancelled(self, state: TheoremForgeState) -> bool:
         """
         Check if a state has been cancelled.
+        
+        Works in both single-process and multi-process modes.
         
         Args:
             state: The state to check
@@ -74,22 +85,13 @@ class BaseAgent:
         Returns:
             True if the state or its parent is cancelled, False otherwise
         """
-        async with self.context.cancellation_lock:
-            # Check if this state is cancelled
-            if state.id in self.context.cancellation_events:
-                if self.context.cancellation_events[state.id].is_set():
-                    return True
-            
-            # Check if parent is cancelled
-            if state.parent_id and state.parent_id in self.context.cancellation_events:
-                if self.context.cancellation_events[state.parent_id].is_set():
-                    return True
-        
-        return False
+        return self.context.is_cancelled(state.id, state.parent_id)
 
     async def is_blacklisted(self, state: TheoremForgeState) -> bool:
         """
         Check if a state is blacklisted.
+        
+        Works in both single-process and multi-process modes.
         
         Args:
             state: The state to check
@@ -97,11 +99,7 @@ class BaseAgent:
         Returns:
             True if the state or its parent is blacklisted, False otherwise
         """
-        async with self.context.black_list_lock:
-            return (
-                state.id in self.context.black_list 
-                or (state.parent_id and state.parent_id in self.context.black_list)
-            )
+        return self.context.is_blacklisted(state.id, state.parent_id)
 
     async def should_skip_state(self, state: TheoremForgeState) -> bool:
         """
@@ -120,7 +118,7 @@ class BaseAgent:
             return True
         
         if await self.is_cancelled(state):
-            logger.info(
+            logger.debug(
                 f"{self.agent_name}: State {state.id} is cancelled, skipping"
             )
             return True
@@ -131,10 +129,16 @@ class BaseAgent:
         """
         Register a cancellation event for a state before starting work.
         
+        Works in both single-process and multi-process modes.
+        
         Args:
             state: The state to register
         """
-        async with self.context.cancellation_lock:
+        if self.context.is_mp_mode():
+            # In mp mode, just ensure the flag exists (False = not cancelled)
+            if state.id not in self.context.cancellation_flags:
+                self.context.cancellation_flags[state.id] = False
+        else:
             if state.id not in self.context.cancellation_events:
                 self.context.cancellation_events[state.id] = asyncio.Event()
 
@@ -142,9 +146,9 @@ class BaseAgent:
         """
         Clean up cancellation event for a state after work is done.
         
+        Works in both single-process and multi-process modes.
+        
         Args:
             state: The state to clean up
         """
-        async with self.context.cancellation_lock:
-            if state.id in self.context.cancellation_events:
-                del self.context.cancellation_events[state.id]
+        self.context.cleanup_cancellation(state.id)

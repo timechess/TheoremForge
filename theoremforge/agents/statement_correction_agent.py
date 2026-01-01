@@ -36,7 +36,7 @@ class StatementCorrectionAgent(BaseAgent):
             await self.add_state_request("finish_agent", state)
             return
 
-        logger.info(
+        logger.debug(
             f"Statement Correction Agent: Attempting to correct {len(failed_formalizations)} failed formalizations concurrently for state {state.id}"
         )
 
@@ -73,7 +73,7 @@ class StatementCorrectionAgent(BaseAgent):
         for i, response in enumerate(responses):
             # Check for cancellation during verification loop
             if await self.is_cancelled(state):
-                logger.info(
+                logger.debug(
                     f"Statement Correction Agent: State {state.id} cancelled during verification"
                 )
                 await self.add_state_request("finish_agent", state)
@@ -89,13 +89,13 @@ class StatementCorrectionAgent(BaseAgent):
                 cleaned_code = remove_comments(erase_header(code.strip("\n")))
                 if cleaned_code not in valid_codes:
                     valid_codes.append(cleaned_code)
-                    logger.info(
+                    logger.debug(
                         f"Statement Correction Agent: Found valid corrected code for state {state.id} at attempt {i}"
                     )
               
         # If we found valid corrected codes, route to semantic check
         if valid_codes:
-            logger.info(
+            logger.debug(
                 f"Statement Correction Agent: Found {len(valid_codes)} valid corrected codes for state {state.id}, routing to semantic_check_agent"
             )
             # Store all valid codes in metadata for semantic check agent

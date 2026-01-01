@@ -1,5 +1,6 @@
 import aiohttp
-
+from loguru import logger
+import asyncio
 
 class RemoteVerifier:
     """
@@ -36,7 +37,7 @@ class RemoteVerifier:
         return self.session
 
     async def verify(
-        self, code: str, allow_sorry: bool = True
+        self, code: str, allow_sorry: bool = True, max_retries: int = 3
     ) -> tuple[bool, list[dict], str]:
         """
         Verify a single piece of Lean code by making a request to the verification server.
@@ -49,16 +50,23 @@ class RemoteVerifier:
             tuple[bool, list[dict]]: A tuple containing:
                 - bool: Whether the verification was successful.
                 - list[dict]: Messages from the verification process.
+                - str: Error message if the verification failed.
         """
-        session = await self._get_session()
-        async with session.post(
-            f"{self.url}/verify", json={"code": code, "allow_sorry": allow_sorry}
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(f"Server error: {error_text}")
-            result = await response.json()
-            return result["valid"], result["messages"], result["error_str"]
+        for _ in range(max_retries):
+            try:
+                session = await self._get_session()
+                async with session.post(
+                    f"{self.url}/verify", json={"code": code, "allow_sorry": allow_sorry}
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"Server error: {error_text}")
+                    result = await response.json()
+                    return result["valid"], result["messages"], result["error_str"]
+            except Exception as e:
+                logger.error(f"Error verifying code: {e}")
+                await asyncio.sleep(1)
+        raise Exception(f"Failed to verify code after {max_retries} retries") from None
 
     async def extract_subgoals(self, code: str) -> list[str]:
         """

@@ -31,7 +31,7 @@ class StatementNormalizationAgent(BaseAgent):
         return match.group(1).strip() if match else None
 
     async def _run(self, state: TheoremForgeState):
-        logger.info(f"Statement Normalization Agent: Start to process state {state.id}")
+        logger.debug(f"Statement Normalization Agent: Start to process state {state.id}")
 
         if not state.informal_statement:
             logger.error(
@@ -64,7 +64,7 @@ class StatementNormalizationAgent(BaseAgent):
             )
             state.normalized_statement = state.informal_statement
         else:
-            logger.info(f"Statement Normalization Agent: Normalized statement {state.id}")
+            logger.debug(f"Statement Normalization Agent: Normalized statement {state.id}")
             state.normalized_statement = normalized_statement
         logger.debug(
             f"Statement Normalization Agent: Routing state {state.id} to definition_retrieval_agent"

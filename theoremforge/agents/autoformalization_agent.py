@@ -55,7 +55,7 @@ class AutoformalizationAgent(BaseAgent):
 
             # Check for cancellation during verification loop
             if await self.is_cancelled(state):
-                logger.info(
+                logger.debug(
                     f"AutoformalizationAgent: State {state.id} cancelled during verification"
                 )
                 await self.add_state_request("finish_agent", state)
@@ -73,7 +73,7 @@ class AutoformalizationAgent(BaseAgent):
                         remove_comments(erase_header(code.strip("\n")))
                     )
                 else:
-                    logger.info(
+                    logger.debug(
                         f"AutoformalizationAgent: Skipping duplicate valid code for state {state.id}"
                     )
             else:
@@ -82,7 +82,7 @@ class AutoformalizationAgent(BaseAgent):
 
         # If no syntactically valid codes, route to statement correction
         if not valid_codes:
-            logger.info(
+            logger.debug(
                 f"AutoformalizationAgent: No syntactically valid code for state {state.id}, routing to statement_correction_agent"
             )
             # Store failed attempts for correction
@@ -90,7 +90,7 @@ class AutoformalizationAgent(BaseAgent):
             await self.add_state_request("statement_correction_agent", state)
             return
 
-        logger.info(
+        logger.debug(
             f"AutoformalizationAgent: Found {len(valid_codes)} unique syntactically valid codes for state {state.id}, routing to semantic_check_agent"
         )
 

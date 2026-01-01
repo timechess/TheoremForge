@@ -4,7 +4,7 @@ from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from theoremforge.utils import (
     extract_lean_code,
     call_llm_interruptible,
-    CancellationError,
+    statement_check,
 )
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.prompt_manager import prompt_manager
@@ -41,12 +41,12 @@ class ProverAgent(BaseAgent):
         codes = [extract_lean_code(code) for code in response]
         if not any(codes):
             if state.parent_id:
-                logger.info(
+                logger.debug(
                     f"Prover Agent: Failed to generate formal proof for state {state.id}, routing to finish_agent"
                 )
                 await self.add_state_request("shallow_solve_agent", state)
             else:
-                logger.info(
+                logger.debug(
                     f"Prover Agent: Failed to generate formal proof for state {state.id}, routing to theorem_retrieval_agent"
                 )
                 await self.add_state_request("theorem_retrieval_agent", state)
@@ -60,10 +60,12 @@ class ProverAgent(BaseAgent):
 
             if not code:
                 continue
-
+            
+            if not statement_check(state.formal_statement, code):
+                continue
             # Check for cancellation before verification
             if await self.is_cancelled(state):
-                logger.info(
+                logger.debug(
                     f"Prover Agent: State {state.id} cancelled during verification loop"
                 )
                 await self.add_state_request("finish_agent", state)
@@ -71,7 +73,7 @@ class ProverAgent(BaseAgent):
 
             valid, messages, error_str = await self.context.verifier.verify(code, False)
             if valid:
-                logger.info(
+                logger.debug(
                     f"Prover Agent: Successfully generated formal proof for state {state.id}"
                 )
                 state.formal_proof = code
@@ -87,7 +89,7 @@ class ProverAgent(BaseAgent):
 
         if not valid_flag:
             if failed_proofs:
-                logger.info(
+                logger.debug(
                     f"Prover Agent: All codes failed for state {state.id}, routing to proof_correction"
                 )
                 # Store ALL failed attempts for proof correction

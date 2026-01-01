@@ -29,7 +29,36 @@ def extract_lean_code(text: str) -> str:
         return matches[-1].strip()
 
     return None
+    
+def statement_check(statement: str, proof: str) -> bool:
+    """
+    Check if the given statement is in the proof.
 
+    Example:
+    statement: "def xxx ... \n theorem ex (h: ...) ... := by sorry"
+    Check if "theorem ex (h: ...) ..." in proof (do not include := by sorry)
+    """
+    # Find theorem/lemma declarations followed by := by sorry or := sorry
+    # Pattern: capture (theorem|lemma name ...) before := by sorry or := sorry
+    if not statement or not proof:
+        return False
+    statement = remove_comments(statement)
+    pattern = r"((?:theorem|lemma)\s+\w+.*?)\s*:=\s*(?:by\s+)?sorry"
+
+    matches = re.findall(pattern, statement, re.DOTALL)
+
+    if not matches:
+        return True  # No theorem/lemma declarations to check
+
+    for match in matches:
+        # Normalize whitespace in both declaration and proof for comparison
+        decl_normalized = " ".join(match.strip().split())
+        proof_normalized = " ".join(proof.split())
+
+        if decl_normalized not in proof_normalized:
+            return False
+
+    return True
 
 def remove_comments(text):  # remove comments
     # First remove all /- ... -/ blocks
@@ -301,10 +330,10 @@ async def call_llm_interruptible(
         CancellationError: If the state is cancelled during execution
     """
     # Check if already cancelled before starting
-    async with context.cancellation_lock:
-        cancellation_event = context.cancellation_events.get(state.id)
-        if cancellation_event and cancellation_event.is_set():
-            raise CancellationError(f"State {state.id} was cancelled before LLM call")
+    # async with context.cancellation_lock:
+    cancellation_event = context.cancellation_events.get(state.id)
+    if cancellation_event and cancellation_event.is_set():
+        raise CancellationError(f"State {state.id} was cancelled before LLM call")
 
     # Create the LLM call task
     llm_task = asyncio.create_task(
@@ -323,8 +352,7 @@ async def call_llm_interruptible(
     )
 
     # If there's a cancellation event, wait for either completion or cancellation
-    async with context.cancellation_lock:
-        cancellation_event = context.cancellation_events.get(state.id)
+    cancellation_event = context.cancellation_events.get(state.id)
 
     if cancellation_event:
         # Create cancellation wait task

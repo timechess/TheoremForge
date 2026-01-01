@@ -3,7 +3,7 @@ from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from openai import AsyncOpenAI
 from google.genai import Client
-from theoremforge.utils import extract_lean_code, call_llm_interruptible
+from theoremforge.utils import extract_lean_code, call_llm_interruptible, statement_check
 from theoremforge.prompt_manager import prompt_manager
 
 
@@ -38,7 +38,7 @@ class ShallowSolveAgent(BaseAgent):
             current_round = len(state.metadata["shallow_solve_history"])
 
         if current_round >= self.max_rounds:
-            logger.info(
+            logger.debug(
                 f"Shallow Solve Agent: Max rounds ({self.max_rounds}) reached for state {state.id}"
             )
             await self.add_state_request("finish_agent", state)
@@ -53,7 +53,7 @@ class ShallowSolveAgent(BaseAgent):
                 useful_theorems,
             )
             prompt = initial_prompt
-            logger.info(f"Shallow Solve Agent: Round 0 (initial) for state {state.id}")
+            logger.debug(f"Shallow Solve Agent: Round 0 (initial) for state {state.id}")
         else:
             # Add refinement prompt with latest error
             refinement_prompt = prompt_manager.shallow_solve_refinement(
@@ -63,7 +63,7 @@ class ShallowSolveAgent(BaseAgent):
                 useful_theorems=state.metadata.get("useful_theorems", ""),
             )
             prompt = refinement_prompt
-            logger.info(f"Shallow Solve Agent: Round {current_round} (refinement) for state {state.id}")
+            logger.debug(f"Shallow Solve Agent: Round {current_round} (refinement) for state {state.id}")
 
         # Call LLM with chat history (interruptible)
         response = await call_llm_interruptible(
@@ -98,8 +98,15 @@ class ShallowSolveAgent(BaseAgent):
 
         # Check for cancellation before verification
         if await self.is_cancelled(state):
-            logger.info(
+            logger.debug(
                 f"Shallow Solve Agent: State {state.id} cancelled before verification"
+            )
+            await self.add_state_request("finish_agent", state)
+            return
+
+        if not statement_check(state.formal_statement, code):
+            logger.debug(
+                f"Shallow Solve Agent: Proof does not contain the formal statement for state {state.id}"
             )
             await self.add_state_request("finish_agent", state)
             return
@@ -122,7 +129,7 @@ class ShallowSolveAgent(BaseAgent):
 
 
         if valid:
-            logger.info(
+            logger.debug(
                 f"Shallow Solve Agent: Successfully proved state {state.id} at round {current_round}"
             )
             state.formal_proof = code
@@ -130,7 +137,7 @@ class ShallowSolveAgent(BaseAgent):
             await self.add_state_request("finish_agent", state)
             return
         else:
-            logger.info(
+            logger.debug(
                 f"Shallow Solve Agent: Round {current_round} failed for state {state.id}, will retry"
             )
             await self.task_queue.put(state)

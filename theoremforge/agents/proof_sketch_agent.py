@@ -5,6 +5,7 @@ from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from theoremforge.utils import (
     extract_lean_code,
     call_llm_interruptible,
+    statement_check,
 )
 from theoremforge.prompt_manager import prompt_manager
 from loguru import logger
@@ -47,8 +48,15 @@ class ProofSketchAgent(BaseAgent):
         )
         proof_sketch = extract_lean_code(response[0])
         if not proof_sketch:
-            logger.info(
+            logger.debug(
                 "Proof Sketch Agent: Proof sketch generation failed. Moving to finished."
+            )
+            await self.add_state_request("finish_agent", state)
+            return
+
+        if not statement_check(state.formal_statement, proof_sketch):
+            logger.debug(
+                f"Proof Sketch Agent: Proof sketch does not contain the formal statement for state {state.id}"
             )
             await self.add_state_request("finish_agent", state)
             return
@@ -57,13 +65,13 @@ class ProofSketchAgent(BaseAgent):
             proof_sketch, True
         )
         if valid:
-            logger.info(
+            logger.debug(
                 f"Proof Sketch Agent: Successfully generated proof sketch for state {state.id}"
             )
             state.proof_sketch = proof_sketch
             await self.add_state_request("subgoal_extraction_agent", state)
         else:
-            logger.info(
+            logger.debug(
                 f"Proof Sketch Agent: Failed to generate proof sketch for state {state.id}, routing to sketch_correction"
             )
             state.metadata["failed_sketch"] = {

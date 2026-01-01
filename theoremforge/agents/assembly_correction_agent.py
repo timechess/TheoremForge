@@ -41,7 +41,7 @@ class AssemblyCorrectionAgent(BaseAgent):
             )
             code = extract_lean_code(response[0])
             if not code:
-                logger.info(
+                logger.debug(
                     f"Assembly Correction Agent: Failed to extract Lean code from response for state {state.id}"
                 )
                 await self.add_state_request("finish_agent", state)
@@ -51,14 +51,14 @@ class AssemblyCorrectionAgent(BaseAgent):
                 code, False
             )
             if valid:
-                logger.info(
+                logger.debug(
                     f"Assembly Correction Agent: Successfully corrected assembly for state {state.id}"
                 )
                 state.formal_proof = code
                 state.success = True
                 await self.add_state_request("finish_agent", state)
             else:
-                logger.info(
+                logger.debug(
                     f"Assembly Correction Agent: Failed to correct assembly for state {state.id}, routing to finish_agent"
                 )
                 await self.add_state_request("finish_agent", state)
