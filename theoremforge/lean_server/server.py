@@ -368,7 +368,7 @@ class AsyncVerifier:
 
     async def batched_verify(
         self, codes: list[str], allow_sorry: bool = True
-    ) -> list[tuple[bool, list[dict]]]:
+    ) -> list[tuple[bool, list[dict], str]]:
         """
         Asynchronously verify multiple pieces of Lean code in parallel.
 
@@ -381,9 +381,10 @@ class AsyncVerifier:
             allow_sorry (bool, optional): Whether to allow 'sorry' in the code. Defaults to True.
 
         Returns:
-            list[tuple[bool, list[dict]]]: A list of verification results, each containing:
+            list[tuple[bool, list[dict], str]]: A list of verification results, each containing:
                 - bool: Whether the verification was successful.
                 - list[dict]: Messages from the verification process.
+                - str: Error message if the verification failed.
         """
         if not codes:
             return []

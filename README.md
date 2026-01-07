@@ -68,53 +68,10 @@ uv run run_lean_server
 
 ### 4. Search Server
 
-The search server provides semantic retrieval of relevant Mathlib theorems using Qdrant vector database.
-
-#### Prerequisites
-
-- Docker and Docker Compose
-- Complete the [Configuration](#5-configuration) section first
-
-#### Setup Vector Database
-
-**Start Docker containers**:
+This project uses [LeanExplore](https://www.leanexplore.com/) as the search service. Run the following command to download cache files.
 
 ```sh
-docker compose up -d
-```
-
-**Upload theorem embeddings** (using `all-mpnet-base-v2`):
-
-```sh
-# Multi-GPU (recommended for faster processing)
-uv run python scripts/upload_const.py \
-  --dataset_name FrenzyMath/mathlib_informal_v4.19.0 \
-  --gpu_ids 0,1,2,3
-
-# Single GPU
-uv run python scripts/upload_const.py \
-  --dataset_name FrenzyMath/mathlib_informal_v4.19.0 \
-  --no_multi_gpu
-```
-
-This process embeds ~100K informal theorem descriptions from the [Mathlib dataset](https://huggingface.co/datasets/FrenzyMath/mathlib_informal_v4.19.0).
-
-#### Start the Search Server
-
-```sh
-uv run python scripts/run_search_server.py --port 8001
-```
-
-#### Test the Search Server
-
-```sh
-curl --request POST \
-  --url http://localhost:8001/search \
-  --header 'Content-Type: application/json' \
-  --data '{
-    "queries": ["Prime number"],
-    "topk": 5
-  }' | jq
+uv run leanexplore data fetch
 ```
 
 ### 5. Configuration
@@ -125,9 +82,7 @@ Create a `.env` file in the project root:
 
 ```sh
 CLOSEAI_API_KEY=YOUR_CLOSEAI_API_KEY
-DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY
-MONGO_PASSWORD=YOUR_MONGODB_PASSWORD
-DATABASE_URL=mongodb://admin:${MONGO_PASSWORD}@localhost:27018/theoremforge?authSource=admin
+DATABASE_PATH=./theoremforge.db
 ```
 
 #### Configuration File
@@ -165,18 +120,5 @@ bash scripts/vllm_serve_model.sh \
   --gpu-ids 2,3
 ```
 
-Update `config.yaml` with your chosen port and model path.
+Update `config/gemini-3-flash.yaml` with your chosen port and model path.
 
----
-
-## 比赛结果复现
-
-在完成上述配置后，使用 `main.py` 脚本产出比赛解答。赛题文件位于 `competition_problem` 目录下，目前脚本仅支持单文件输入输出，例如：
-
-```sh
-uv run python main.py --dataset_path competition_problem/lean_1106.jsonl --output_file 1106.jsonl
-```
-
-每日的初赛解答文件位于 `competition_result` 目录下。
-
-**Warning**：由于模型输出的随机性，部分题目经过了多次运行才成功解答，不保证一次性能成功得到与给出的解答相同的结果。`config.yaml` 中为大部分题目运行时使用的模型，但不排除部分题目更换了其中的部分模型的情况。

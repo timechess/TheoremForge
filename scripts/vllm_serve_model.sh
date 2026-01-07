@@ -82,4 +82,4 @@ echo ""
 uv run vllm serve "$MODEL_NAME" \
     --dtype auto \
     --port "$PORT" \
-    --tensor-parallel-size "$TENSOR_PARALLEL_SIZE"
+    --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \

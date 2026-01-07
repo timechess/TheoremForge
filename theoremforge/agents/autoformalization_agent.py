@@ -3,7 +3,7 @@ from theoremforge.state import TheoremForgeContext, TheoremForgeState
 from openai import AsyncOpenAI
 from loguru import logger
 from theoremforge.prompt_manager import prompt_manager
-from theoremforge.utils import extract_lean_code, remove_comments, call_llm_interruptible, CancellationError
+from theoremforge.utils import extract_lean_code, remove_comments, call_llm_interruptible
 from theoremforge.lean_server.server import erase_header
 
 

@@ -1,15 +1,16 @@
 from vllm import LLM, SamplingParams
-from lean_interact import LeanREPLConfig, LocalProject, AutoLeanServer, Command
 import json
 from pathlib import Path
 from theoremforge.utils import (
     extract_lean_code,
 )
-from theoremforge.lean_server.server import erase_header
+from theoremforge.lean_server.server import erase_header, AsyncVerifier
+from theoremforge.utils import statement_check
 import argparse
 from vllm.distributed.parallel_state import destroy_model_parallel
 import torch
 import gc
+import asyncio
 
 HEADER = "import Mathlib\n"
 formalizer_id = "model/ReForm-32B"
@@ -28,18 +29,20 @@ Before producing the Lean 4 code to formally prove the given theorem, provide a 
 The plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof.
 """
 
-config = LeanREPLConfig(
-    project=LocalProject(directory="/home/yicheng_tao/.lean-cache/mathlib4-v4.19.0"),
-)
-
-server = AutoLeanServer(config)
-env = server.run(Command(cmd=HEADER), add_to_session_cache=True).env
-
+config = {
+    "LocalLeanProject": "/home/yicheng/.lean-cache/mathlib4-v4.19.0",
+    "LeanServerWorkers": 8,
+    "LeanServerHeader": "import Mathlib\n",
+    "LeanServerTimeout": 60,
+    "MaxTotalMemory": 0.6,
+    "MaxProcessMemory": 0.6,
+}
+verifier = AsyncVerifier(config)
 results_dir = Path("results")
 results_dir.mkdir(parents=True, exist_ok=True)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", type=str, required=True)
     args = parser.parse_args()
@@ -57,13 +60,14 @@ def main():
         formalizer_prompt.format(problem=problem["nl_problem"]) for problem in problems
     ]
     formalizer_sampling_params = SamplingParams(
-        temperature=0.6, max_tokens=8192, n=4, top_p=0.95
+        temperature=1.0, max_tokens=8192, n=4
     )
     formalizer_results = formalizer.generate(
         formalizer_prompts, formalizer_sampling_params
     )
 
     formalizer_records = []
+
     for problem, result in zip(problems, formalizer_results):
         valid_code = None
         for output in result.outputs:
@@ -72,8 +76,8 @@ def main():
                 lean_code = erase_header(lean_code)
             else:
                 continue
-            verification_result = server.run(Command(cmd=lean_code, env=env))
-            valid = verification_result.lean_code_is_valid(allow_sorry=True)
+            verification_result = await verifier.verify(lean_code, True)
+            valid = verification_result[0]
             if valid:
                 valid_code = lean_code
                 break
@@ -121,29 +125,30 @@ def main():
         for record in valid_records
     ]
     prover_sampling_params = SamplingParams(
-        temperature=0.6, max_tokens=8192, n=4, top_p=0.95
+        temperature=1.0, max_tokens=8192, n=4
     )
     prover_results = prover.generate(prover_prompts, prover_sampling_params)
+    destroy_model_parallel()
+    del prover
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("Prover resources released")
+
     prover_records = {}
-    for record, result in zip(valid_records, prover_results):
-        valid_flag = False
-        formal_proof = None
-        for output in result.outputs:
-            lean_code = extract_lean_code(output.text)
-            if lean_code:
-                lean_code = erase_header(lean_code)
-            else:
-                continue
-            verification_result = server.run(Command(cmd=lean_code, env=env))
-            valid = verification_result.lean_code_is_valid(allow_sorry=False)
-            if valid:
-                valid_flag = True
-                formal_proof = lean_code
-                break
-        prover_records[record["id"]] = {
-            "formal_proof": formal_proof,
-            "proof_is_valid": valid_flag,
-        }
+    prover_outputs = [[extract_lean_code(output.text) for output in results.outputs] for results in prover_results]
+    async def verify_code(statement: str, codes: list[str]):
+        codes = [erase_header(code) for code in codes if code is not None]
+        codes = [code for code in codes if statement_check(statement, code)]
+        verification_result = await verifier.batched_verify(codes, False)
+        valid_index = [i for i, result in enumerate(verification_result) if result[0]]
+        if valid_index:
+            return codes[valid_index[0]]
+        return None
+
+    tasks = [verify_code(record["formal_statement"], codes) for record, codes in zip(valid_records, prover_outputs)]
+    results = await asyncio.gather(*tasks)
+    
+    prover_records = {record["id"]: {"formal_proof": result, "proof_is_valid": result is not None} for record, result in zip(valid_records, results)}
 
     # Log prover statistics
     valid_count = sum(record["proof_is_valid"] for record in prover_records.values())
@@ -181,7 +186,7 @@ def main():
     with open(results_dir / "expert_results.jsonl", "w") as f:
         for record in final_results:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
+    await verifier.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

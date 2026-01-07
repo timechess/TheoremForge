@@ -17,3 +17,6 @@ data/
 persist/
 qdrant_data/
 visualize*
+
+*.jsonl
+*.db

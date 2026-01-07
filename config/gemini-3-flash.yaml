@@ -1,5 +1,5 @@
 LeanServerConfig:
-  LocalLeanProject: /home/yicheng_tao/.lean-cache/mathlib4-v4.19.0 # Your local Lean project path
+  LocalLeanProject: /home/yicheng/.lean-cache/mathlib4-v4.19.0 # Your local Lean project path
   LeanServerPort: 8000 # The port of the verifier server
   LeanServerWorkers: 8 # The number of workers for the verifier server
   LeanServerHeader: "import Mathlib\n" # The header of the verifier server
@@ -30,7 +30,7 @@ AutoformalizationAgentConfig:
   model: "model/ReForm-32B"
   api_key: "LOCAL"  # For local models
   sampling_params:
-    temperature: 0.6
+    temperature: 1.0
     n: 4
     max_tokens: 8192
 
@@ -66,7 +66,7 @@ ProverAgentConfig:
   model: "model/Goedel-Prover-V2-32B"
   api_key: "LOCAL"  # Environment variable name
   sampling_params:
-    temperature: 0.6
+    temperature: 1.0
     n: 4
     max_tokens: 8192
 
