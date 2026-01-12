@@ -72,7 +72,7 @@ class TheoremRetrievalAgent(BaseAgent):
         
         # Use async search to avoid blocking the event loop
         results = await self.retriever.search_async(queries, 5)
-        query_results = [format_search_results(result) for result in results]
+        query_results = "\n".join([format_search_results(result) for result in results])
         theorem_selection_prompt = prompt_manager.theorem_selection(
             state.formal_statement, query_results
         )

@@ -68,7 +68,7 @@ class DefinitionRetrievalAgent(BaseAgent):
 
         # Use async search to avoid blocking the event loop
         results = await self.retriever.search_async(queries, 5)
-        definitions = [format_search_results(result) for result in results]
+        definitions = "\n".join([format_search_results(result) for result in results])
         definition_selection_prompt = prompt_manager.definition_selection(
             state.normalized_statement, definitions
         )
