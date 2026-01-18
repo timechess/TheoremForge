@@ -48,17 +48,17 @@ def statement_check(statement: str, proof: str) -> bool:
     matches = re.findall(pattern, statement, re.DOTALL)
 
     if not matches:
-        return True  # No theorem/lemma declarations to check
+        return False  # No theorem/lemma declarations to check
 
     for match in matches:
         # Normalize whitespace in both declaration and proof for comparison
         decl_normalized = " ".join(match.strip().split())
         proof_normalized = " ".join(proof.split())
 
-        if decl_normalized not in proof_normalized:
-            return False
+        if decl_normalized in proof_normalized:
+            return True
 
-    return True
+    return False
 
 def remove_comments(text):  # remove comments
     # First remove all /- ... -/ blocks
