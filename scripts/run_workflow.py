@@ -12,8 +12,8 @@ logger.add(sys.stdout, level="INFO")
 
 def load_existing_results(export_file: str) -> tuple[list[dict], set]:
     """
-    加载已有的输出结果，找到最后一个 success=true 的条目，
-    保留它及之前的所有结果，返回保留的结果列表和已处理的 id 集合。
+    Load existing output results, find the last entry with success=true,
+    keep it and all previous results, return the kept results list and the set of processed ids.
     """
     all_results = []
     
@@ -31,26 +31,26 @@ def load_existing_results(export_file: str) -> tuple[list[dict], set]:
     if not all_results:
         return [], set()
     
-    # 找到最后一个 success=true 的条目索引
+    # Find the index of the last entry with success=true
     last_success_idx = -1
     for i, result in enumerate(all_results):
         if result.get("success", False):
             last_success_idx = i
     
     if last_success_idx == -1:
-        # 没有成功的条目，从头开始
-        logger.info("没有找到成功的条目，将从头开始处理")
+        # No successful entries, start from the beginning
+        logger.info("No successful entries found, will start processing from the beginning")
         return [], set()
     
-    # 保留最后一个成功条目及之前的所有结果
+    # Keep the last successful entry and all previous results
     kept_results = all_results[:last_success_idx + 1]
     processed_ids = {result["id"] for result in kept_results}
     
     discarded_count = len(all_results) - len(kept_results)
     logger.info(
-        f"检测到已有 {len(all_results)} 条结果，"
-        f"最后成功的是第 {last_success_idx + 1} 条，"
-        f"保留 {len(kept_results)} 条，丢弃 {discarded_count} 条失败结果"
+        f"Detected {len(all_results)} existing results, "
+        f"last successful is entry {last_success_idx + 1}, "
+        f"keeping {len(kept_results)} entries, discarding {discarded_count} failed results"
     )
     
     return kept_results, processed_ids
@@ -62,11 +62,11 @@ async def main():
     parser.add_argument("--max_workers", type=int, required=True)
     parser.add_argument("--input_file", type=str, required=True)
     parser.add_argument("--export_file", type=str, required=True)
-    parser.add_argument("--resume", action="store_true", help="从断点继续运行")
+    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
 
     args = parser.parse_args()
 
-    # 加载已有结果
+    # Load existing results
     existing_results, processed_ids = [], set()
     if args.resume:
         existing_results, processed_ids = load_existing_results(args.export_file)
@@ -83,7 +83,7 @@ async def main():
     with open(args.input_file, "r") as f:
         for line in f:
             data = json.loads(line)
-            # 跳过已处理的条目
+            # Skip already processed entries
             if data["id"] in processed_ids:
                 skipped_count += 1
                 continue
@@ -94,16 +94,16 @@ async def main():
             id_map[data["id"]] = statment_id
     
     if skipped_count > 0:
-        logger.info(f"跳过 {skipped_count} 条已处理的条目，新提交 {len(id_map)} 条")
+        logger.info(f"Skipped {skipped_count} already processed entries, newly submitted {len(id_map)} entries")
     
     if not id_map:
-        logger.info("没有新的条目需要处理")
+        logger.info("No new entries to process")
         await manager.stop()
         return
     
     await manager.wait_for_completion()
     
-    # 收集新结果
+    # Collect new results
     new_results = []
     for i, statement_id in id_map.items():
         data = await manager.context.db.get_state(statement_id)
@@ -117,13 +117,13 @@ async def main():
                 "success": data.get("success", False),
             })
     
-    # 合并已有结果和新结果，写入输出文件
+    # Merge existing results and new results, write to output file
     all_results = existing_results + new_results
     with open(args.export_file, "w") as f:
         for result in all_results:
             f.write(json.dumps(result, ensure_ascii=False) + "\n")
     
-    logger.info(f"处理完成，共 {len(all_results)} 条结果（已有 {len(existing_results)} 条 + 新增 {len(new_results)} 条）")
+    logger.info(f"Processing completed, total {len(all_results)} results (existing {len(existing_results)} + new {len(new_results)})")
     
     await manager.stop()
 

@@ -1,7 +1,7 @@
 [project]
 name = "theoremforge"
 version = "0.1.0"
-description = "Add your description here"
+description = "An agentic workflow for formal data synthesis."
 readme = "README.md"
 requires-python = ">=3.11,<=3.13"
 dependencies = [

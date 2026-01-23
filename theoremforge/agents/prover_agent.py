@@ -8,6 +8,7 @@ from theoremforge.utils import (
 )
 from theoremforge.agents.base_agent import BaseAgent
 from theoremforge.prompt_manager import prompt_manager
+import re
 
 
 class ProverAgent(BaseAgent):
@@ -26,6 +27,11 @@ class ProverAgent(BaseAgent):
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=1500)
         self.model_name = model_name
         self.sampling_params = sampling_params
+
+    def _extract_header(self, code: str) -> str:
+        pattern = r"open\s+.*$"
+        matches = re.findall(pattern, code, re.MULTILINE)
+        return "\n".join([match.strip() for match in matches]) if matches else None
 
     async def _run(self, state: TheoremForgeState):
         prompt = prompt_manager.proof_attempt(state.formal_statement)
@@ -54,6 +60,7 @@ class ProverAgent(BaseAgent):
 
         valid_flag = False
         failed_proofs = []
+        header = self._extract_header(state.formal_statement)
         for i, code in enumerate(codes):
             if valid_flag:
                 break
@@ -61,6 +68,9 @@ class ProverAgent(BaseAgent):
             if not code:
                 continue
             
+            if header and header not in code:
+                code = header + "\n" + code
+                
             if not statement_check(state.formal_statement, code):
                 continue
             # Check for cancellation before verification
