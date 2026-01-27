@@ -2,7 +2,7 @@
 
 # TheoremForge: Scaling up Formal Data Synthesis with Low-Budget Agentic Workflow
 
-<!-- [![arXiv](https://img.shields.io/badge/arXiv-2502.14637-b31b1b?style=flat&logo=arxiv)](https://arxiv.org/abs/2502.14637) -->
+[![arXiv](https://img.shields.io/badge/arXiv-2502.14637-b31b1b?style=flat&logo=arxiv)](https://arxiv.org/abs/2601.17332)
 
 
 </div>
@@ -241,3 +241,15 @@ The script generates five JSONL files in the `results/` directory:
 - The database must contain trace information from the workflow run
 - Ensure `DATABASE_PATH` in `.env` points to the correct database file
 
+We have open-sourced our extracted data in huggingface: https://huggingface.co/datasets/timechess/theoremforge
+
+## Citation
+
+```bibtex
+@misc{tao2026theoremforgescalingformaldata,
+      title={TheoremForge: Scaling up Formal Data Synthesis with Low-Budget Agentic Workflow}, 
+      author={Yicheng Tao and Hongteng Xu},
+      year={2026},
+      journal={arXiv preprint arXiv:2601.17332}
+}
+```
