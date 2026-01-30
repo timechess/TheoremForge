@@ -8,7 +8,7 @@ from openai.types.chat.chat_completion import ChatCompletion
 from google.genai import Client, types
 from google.genai.errors import APIError
 from theoremforge.state import TheoremForgeState, TheoremForgeContext
-from lean_explore.local.service import APISearchResultItem
+from lean_explore.search.service import SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +82,8 @@ def remove_comments(text):  # remove comments
     return cleaned_text.strip()
 
 
-def format_search_results(result: APISearchResultItem) -> str:
-    return f"name: {result.primary_declaration.lean_name}\nlean_code: {result.display_statement_text}\ninformal_description: {result.informal_description}\ndocstring: {result.docstring}"
+def format_search_results(result: SearchResult) -> str:
+    return f"name: {result.name}\nlean_code: {result.source_text}\ninformal_description: {result.informalization}\ndocstring: {result.docstring}"
 
 
 def get_error_str(

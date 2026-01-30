@@ -31,19 +31,21 @@ class SubgoalExtractionAgent(BaseAgent):
         return [match.strip() for match in matches]
 
     async def _run(self, state: TheoremForgeState):
-        prompt = prompt_manager.subgoal_extraction(state.proof_sketch)
-        response = await call_llm_interruptible(
-            state,
-            self.context,
-            self.client,
-            self.model_name,
-            prompt,
-            self.sampling_params,
-            "subgoal_extraction_agent",
-        )
-        output = response[0]
-        subgoals = self._extract_subgoals(output)
-
+        if not self.context.use_extract_goal:
+            prompt = prompt_manager.subgoal_extraction(state.proof_sketch)
+            response = await call_llm_interruptible(
+                state,
+                self.context,
+                self.client,
+                self.model_name,
+                prompt,
+                self.sampling_params,
+                "subgoal_extraction_agent",
+            )
+            output = response[0]
+            subgoals = self._extract_subgoals(output)
+        else:
+            subgoals = await self.context.verifier.extract_subgoals(state.proof_sketch)
         subgoal_ids = [str(uuid4()) for _ in subgoals]
 
         if not subgoals:

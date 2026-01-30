@@ -273,6 +273,19 @@ wheels = [
 ]
 
 [[package]]
+name = "bm25s"
+version = "0.2.14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/72/5ad06c30991ba494242785a3ab8987deb01c07dfc1c492847bde221e62bf/bm25s-0.2.14.tar.gz", hash = "sha256:7b6717770fffbdb3b962e5fe8ef1e6eac7f285d0fbc14484b321e136df837139", size = 59266, upload-time = "2025-09-08T17:06:30.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/3e/e3ae2f0fb0f8f46f9c787fa419ca5203ff850d0630749a26baf0a6570453/bm25s-0.2.14-py3-none-any.whl", hash = "sha256:76cdb70ae40747941b150a1ec16a9c20c576d6534d0a3c3eebb303c779b3cf65", size = 55128, upload-time = "2025-09-08T17:06:29.324Z" },
+]
+
+[[package]]
 name = "cachetools"
 version = "6.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1700,28 +1713,32 @@ wheels = [
 
 [[package]]
 name = "lean-explore"
-version = "0.3.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiosqlite" },
+    { name = "bm25s" },
     { name = "faiss-cpu" },
     { name = "filelock" },
+    { name = "greenlet" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "nltk" },
     { name = "numpy" },
     { name = "openai-agents" },
+    { name = "pooch" },
     { name = "pydantic" },
-    { name = "rank-bm25" },
     { name = "requests" },
-    { name = "sentence-transformers" },
+    { name = "rich" },
     { name = "sqlalchemy" },
+    { name = "tenacity" },
     { name = "toml" },
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/25/e28a6ff3de71c9e4ffe46910a3dbd588f34c0505a65c90c2447640bd2bc6/lean_explore-0.3.0.tar.gz", hash = "sha256:f2a7685cd97477f44a236f77171bfdaaabe2fab73acd668505fa423c9cffe146", size = 63195, upload-time = "2025-06-09T17:47:36.313Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/ef/61f574736ef791e5d9852a7ae976bd3110c5fde51d5bfbec99def02ac59d/lean_explore-1.0.0.tar.gz", hash = "sha256:4030b1fa8ed93787e54466479d70df9e6435c836e6882058fd1894d2d9702975", size = 62073, upload-time = "2026-01-28T22:08:03.505Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/89/85a0527aafa8addcd7277b5d084562fa184b0eb965865cf27ecf49278f59/lean_explore-0.3.0-py3-none-any.whl", hash = "sha256:8ea4521eb07dd4a318af321262cace3def156923f787768d52c5b9723887943d", size = 66088, upload-time = "2025-06-09T17:47:34.267Z" },
+    { url = "https://files.pythonhosted.org/packages/61/4f/06d2a9dc4dd8ba297ec12fe7f1cbf990582d15c90d0e814d7f8df1f15307/lean_explore-1.0.0-py3-none-any.whl", hash = "sha256:1df10498497f9fb49bac82c7a49c461d8948375876bd31507aa7ef26d89d8507", size = 73613, upload-time = "2026-01-28T22:08:02.547Z" },
 ]
 
 [[package]]
@@ -2796,6 +2813,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pooch"
+version = "1.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "platformdirs" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c6/77/b3d3e00c696c16cf99af81ef7b1f5fe73bd2a307abca41bd7605429fe6e5/pooch-1.8.2.tar.gz", hash = "sha256:76561f0de68a01da4df6af38e9955c4c9d1a5c90da73f7e40276a5728ec83d10", size = 59353, upload-time = "2024-06-06T16:53:46.224Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/87/77cc11c7a9ea9fd05503def69e3d18605852cd0d4b0d3b8f15bbeb3ef1d1/pooch-1.8.2-py3-none-any.whl", hash = "sha256:3529a57096f7198778a5ceefd5ac3ef0e4d06a6ddaf9fc2d609b806f25302c47", size = 64574, upload-time = "2024-06-06T16:53:44.343Z" },
+]
+
+[[package]]
 name = "portalocker"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3520,18 +3551,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/8b/76c7d325e11d97cb8eb5e261c3759e9ed6664735afbf32fdded5b580690c/qdrant_client-1.15.1.tar.gz", hash = "sha256:631f1f3caebfad0fd0c1fba98f41be81d9962b7bf3ca653bed3b727c0e0cbe0e", size = 295297, upload-time = "2025-07-31T19:35:19.627Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/33/d8df6a2b214ffbe4138db9a1efe3248f67dc3c671f82308bea1582ecbbb7/qdrant_client-1.15.1-py3-none-any.whl", hash = "sha256:2b975099b378382f6ca1cfb43f0d59e541be6e16a5892f282a4b8de7eff5cb63", size = 337331, upload-time = "2025-07-31T19:35:17.539Z" },
-]
-
-[[package]]
-name = "rank-bm25"
-version = "0.2.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/0a/f9579384aa017d8b4c15613f86954b92a95a93d641cc849182467cf0bb3b/rank_bm25-0.2.2.tar.gz", hash = "sha256:096ccef76f8188563419aaf384a02f0ea459503fdf77901378d4fd9d87e5e51d", size = 8347, upload-time = "2022-02-16T12:10:52.196Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/21/f691fb2613100a62b3fa91e9988c991e9ca5b89ea31c0d3152a3210344f9/rank_bm25-0.2.2-py3-none-any.whl", hash = "sha256:7bd4a95571adadfc271746fa146a4bcfd89c0cf731e49c3d1ad863290adbe8ae", size = 8584, upload-time = "2022-02-16T12:10:50.626Z" },
 ]
 
 [[package]]
@@ -4334,7 +4353,7 @@ requires-dist = [
     { name = "flashinfer-python", specifier = ">=0.5.3" },
     { name = "flask", specifier = ">=3.1.2" },
     { name = "google-genai", specifier = ">=1.56.0" },
-    { name = "lean-explore", specifier = ">=0.3.0" },
+    { name = "lean-explore", specifier = ">=1.0.0" },
     { name = "lean-interact", specifier = ">=0.10.5" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.8" },

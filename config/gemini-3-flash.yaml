@@ -6,6 +6,7 @@ LeanServerConfig:
   LeanServerTimeout: 60
   MaxTotalMemory: 0.6 # The maximum total memory of the verifier server
   MaxProcessMemory: 0.6 # The maximum process memory of the verifier server
+  UseExtractGoal: False # Whether to use the `extract_goal *` tactic to extract subgoals
 
 StatementNormalizationAgentConfig:
   base_url: "https://api.openai-proxy.org/google"

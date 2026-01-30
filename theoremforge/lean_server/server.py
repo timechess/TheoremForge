@@ -173,7 +173,7 @@ class LeanServerWorker(multiprocessing.Process):
                             Command(cmd=erase_header(code), env=context_env),
                             timeout=self.config.get("LeanServerTimeout", 20),
                         )
-                        processed_code = code.replace("sorry", "extract_goal")
+                        processed_code = code.replace("sorry", "extract_goal *")
                         sorries = response.sorries
                         processed_response = server.run(
                             Command(cmd=erase_header(processed_code), env=context_env),

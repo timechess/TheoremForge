@@ -48,6 +48,7 @@ class TheoremForgeContext:
             self.cancellation_flags = None  # Not used in single-process mode
         
         self.db: SQLiteClient | None = None
+        self.use_extract_goal = verifier_config.get("UseExtractGoal", False)
         
         # Shared task queues per agent type
         # In mp mode, finish_agent uses mp.Queue, others use asyncio.Queue

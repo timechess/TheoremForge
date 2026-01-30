@@ -4,8 +4,7 @@ import asyncio
 import threading
 from loguru import logger
 
-from lean_explore.local.service import APISearchResultItem, Service
-
+from lean_explore.search.service import Service, SearchResult
 
 class Retriever:
     """
@@ -43,7 +42,7 @@ class Retriever:
             )
         return self._executor
 
-    def _search_single_query(self, query: str, sources: List[str], topk: int) -> List[APISearchResultItem]:
+    def _search_single_query(self, query: str, sources: List[str], topk: int) -> List[SearchResult]:
         """
         Thread-safe search for a single query using the shared Service.
         
@@ -63,7 +62,7 @@ class Retriever:
             logger.warning(f"Search failed for query '{query}': {e}")
             return []
 
-    def search(self, queries: List[str], topk: int) -> List[APISearchResultItem]:
+    def search(self, queries: List[str], topk: int) -> List[SearchResult]:
         """
         Synchronous search across multiple queries (legacy interface).
         
@@ -99,7 +98,7 @@ class Retriever:
     
     def _search_sequential(
         self, queries: List[str], sources: List[str], topk: int
-    ) -> List[APISearchResultItem]:
+    ) -> List[SearchResult]:
         """Fallback sequential search when parallel execution fails."""
         search_results = []
         for query in queries:
@@ -109,7 +108,7 @@ class Retriever:
 
     async def search_async(
         self, queries: List[str], topk: int
-    ) -> List[APISearchResultItem]:
+    ) -> List[SearchResult]:
         """
         Asynchronous search across multiple queries.
         
@@ -135,7 +134,7 @@ class Retriever:
         executor = self._get_executor()
         
         # Create tasks for parallel execution
-        async def search_single(query: str) -> List[APISearchResultItem]:
+        async def search_single(query: str) -> List[SearchResult]:
             return await loop.run_in_executor(
                 executor,
                 self._search_single_query,
